@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Decoder-only LLM 前向计算分解 · 矩阵 / FLOPs / 显存</title>
+<style>
+:root{
+  --bg:#F5F6F8; --panel:#FFFFFF; --panel2:#FAFBFC;
+  --ink:#0F172A; --ink2:#475569; --ink3:#7A8698;
+  --line:#E4E7EC; --line2:#EFF1F4;
+  --compute:#4F46E5; --mem:#0D9488; --attn:#B45309; --kv:#BE123C; --param:#7C3AED; --ok:#047857;
+  --cdim:#EEF2FF; --mdim:#ECFDF5; --adim:#FEF7EC; --kdim:#FEF2F3;
+  --mono:"Cascadia Mono","SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","Microsoft YaHei",Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased;}
+.app{display:flex;align-items:flex-start;gap:24px;max-width:1560px;margin:0 auto;padding:24px;}
+
+/* ---------- Sidebar ---------- */
+.side{position:sticky;top:24px;width:312px;flex:0 0 312px;max-height:calc(100vh - 48px);overflow-y:auto;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 16px;box-shadow:0 1px 2px rgba(16,24,40,.04);}
+.side h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin:0 0 14px;font-weight:600;}
+.grp{margin-bottom:16px;padding-bottom:16px;border-bottom:1px dashed var(--line);}
+.grp:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0;}
+.grp-t{font-size:11px;font-weight:700;color:var(--ink3);letter-spacing:.08em;text-transform:uppercase;margin:0 0 9px;}
+label.fl{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px;font-weight:500;}
+select,input[type=number]{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);
+  font-family:var(--sans);font-size:13px;color:var(--ink);outline:none;}
+select:focus,input[type=number]:focus{border-color:var(--compute);background:#fff;box-shadow:0 0 0 3px rgba(79,70,229,.09);}
+input[type=number]{font-family:var(--mono);}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.row2 .fi{margin-bottom:8px;}
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px;gap:3px;}
+.seg button{flex:1;border:0;background:transparent;padding:6px 4px;border-radius:6px;font-size:12px;font-family:var(--sans);
+  color:var(--ink2);cursor:pointer;font-weight:600;transition:.12s;}
+.seg button.on{background:var(--ink);color:#fff;}
+.chk{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);margin:8px 0 0;cursor:pointer;}
+.chk input{accent-color:var(--compute);width:15px;height:15px;}
+.hint{font-size:11.5px;color:var(--ink3);line-height:1.55;margin-top:7px;}
+
+/* ---------- Main ---------- */
+.main{flex:1;min-width:0;}
+.hero{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:30px 34px;margin-bottom:20px;
+  background-image:linear-gradient(135deg,rgba(79,70,229,.045),rgba(13,148,136,.045) 60%,transparent);}
+.hero h1{margin:0 0 10px;font-size:27px;letter-spacing:-.02em;font-weight:700;}
+.hero p{margin:0;color:var(--ink2);max-width:74ch;font-size:13.5px;}
+.tagrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;}
+.tag{font-size:11.5px;padding:3px 10px;border-radius:999px;background:var(--cdim);color:var(--compute);font-weight:600;font-family:var(--mono);}
+.tag.g{background:var(--mdim);color:var(--mem);} .tag.a{background:var(--adim);color:var(--attn);} .tag.r{background:var(--kdim);color:var(--kv);} .tag.p{background:#F3EEFE;color:var(--param);}
+
+section{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin-bottom:20px;}
+h2.sh{font-size:19px;margin:0 0 6px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:10px;}
+h2.sh .n{font-family:var(--mono);font-size:13px;color:#fff;background:var(--ink);border-radius:6px;padding:1px 8px;flex:0 0 auto;}
+.sub{color:var(--ink3);font-size:13px;margin:0 0 20px;}
+h3{font-size:15px;margin:26px 0 10px;letter-spacing:-.01em;}
+h3:first-of-type{margin-top:6px;}
+p{margin:0 0 12px;color:var(--ink2);}
+code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:#334155;}
+.mono{font-family:var(--mono);}
+b,strong{color:var(--ink);font-weight:650;}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+
+/* ---------- Tables ---------- */
+table{width:100%;border-collapse:collapse;font-size:13px;margin:14px 0;}
+th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line2);vertical-align:top;}
+th{background:var(--panel2);font-weight:600;font-size:12px;color:var(--ink2);letter-spacing:.02em;border-bottom:1px solid var(--line);white-space:nowrap;}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;}
+tbody tr:hover{background:#FBFCFD;}
+tr.tot td{font-weight:700;border-top:2px solid var(--ink);border-bottom:0;background:#FAFAFB;}
+.tblwrap{overflow-x:auto;}
+.dim{color:var(--mem);font-family:var(--mono);font-size:12px;}
+.fx{font-family:var(--mono);font-size:12.5px;color:var(--ink2);}
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:5px;font-weight:600;}
+.p-c{background:var(--cdim);color:var(--compute);} .p-m{background:var(--mdim);color:var(--mem);}
+.p-a{background:var(--adim);color:var(--attn);} .p-k{background:var(--kdim);color:var(--kv);}
+
+/* ---------- Step cards ---------- */
+.step{border:1px solid var(--line);border-left:3px solid var(--compute);border-radius:12px;padding:16px 18px;margin:12px 0;background:var(--panel2);}
+.step.nomem{border-left-color:var(--mem);} .step.attn{border-left-color:var(--attn);} .step.kvb{border-left-color:var(--kv);}
+.step-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+.step-h .idx{font-family:var(--mono);font-size:12px;font-weight:700;color:#fff;background:var(--compute);border-radius:6px;padding:1px 7px;flex:0 0 auto;}
+.step.nomem .step-h .idx{background:var(--mem);} .step.attn .step-h .idx{background:var(--attn);} .step.kvb .step-h .idx{background:var(--kv);}
+.step-h .ttl{font-size:14.5px;font-weight:650;}
+.step-h .shp{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink3);}
+.step p{font-size:13px;margin:0 0 10px;}
+.eq{font-family:var(--mono);font-size:12.5px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  margin:9px 0;overflow-x:auto;white-space:pre;color:#1E293B;line-height:1.75;}
+.mtx{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:9px;margin:10px 0 4px;}
+.mcell{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px;}
+.mcell .k{font-size:11px;color:var(--ink3);font-weight:600;letter-spacing:.03em;text-transform:uppercase;}
+.mcell .v{font-family:var(--mono);font-size:13.5px;font-weight:600;margin-top:2px;}
+.mcell .s{font-size:11px;color:var(--ink3);font-family:var(--mono);margin-top:1px;}
+.mcell.c{border-color:#C7D2FE;background:linear-gradient(180deg,#F8FAFF,#fff);} .mcell.c .v{color:var(--compute);}
+.mcell.m{border-color:#A7F3D0;background:linear-gradient(180deg,#F4FDFA,#fff);} .mcell.m .v{color:var(--mem);}
+.mcell.a{border-color:#FDE68A;background:linear-gradient(180deg,#FFFCF4,#fff);} .mcell.a .v{color:var(--attn);}
+.mcell.k{border-color:#FECDD3;background:linear-gradient(180deg,#FFF8F9,#fff);} .mcell.k .v{color:var(--kv);}
+
+/* ---------- misc ---------- */
+.note{border-left:3px solid var(--attn);background:var(--adim);border-radius:0 10px 10px 0;padding:12px 14px;margin:14px 0;font-size:13px;color:#6B4A08;}
+.note b{color:#7C3E02;}
+.note.blue{border-left-color:var(--compute);background:var(--cdim);color:#3730A3;} .note.blue b{color:#312E81;}
+.note.green{border-left-color:var(--mem);background:var(--mdim);color:#065F46;} .note.green b{color:#065F46;}
+.bar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--line2);margin:6px 0;}
+.bar span{display:block;height:100%;}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin:10px 0;}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;}
+svg.chart{width:100%;height:auto;display:block;margin:10px 0 4px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:15px 17px;}
+.card h4{margin:0 0 10px;font-size:13.5px;letter-spacing:-.01em;}
+.big{font-family:var(--mono);font-size:22px;font-weight:700;letter-spacing:-.02em;}
+.big.c{color:var(--compute);} .big.m{color:var(--mem);} .big.a{color:var(--attn);} .big.k{color:var(--kv);}
+.tiny{font-size:11.5px;color:var(--ink3);}
+.kv-list{list-style:none;padding:0;margin:8px 0 0;}
+.kv-list li{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px dotted var(--line);font-size:12.5px;}
+.kv-list li:last-child{border-bottom:0;}
+.kv-list span:last-child{font-family:var(--mono);font-weight:600;color:var(--ink);white-space:nowrap;}
+.navlist{display:flex;gap:7px;flex-wrap:wrap;margin-top:4px;}
+.navlist a{font-size:12px;color:var(--ink2);text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:3px 11px;transition:.12s;}
+.navlist a:hover{border-color:var(--compute);color:var(--compute);background:var(--cdim);}
+footer{color:var(--ink3);font-size:12px;text-align:center;padding:16px 0 40px;}
+@media(max-width:1080px){.app{flex-direction:column;padding:14px;}.side{position:static;width:100%;flex:none;max-height:none;}.grid2{grid-template-columns:1fr;}section{padding:20px 18px;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ============ SIDEBAR ============ -->
+<aside class="side">
+  <h2>参数控制台</h2>
+
+  <div class="grp">
+    <div class="grp-t">模型预设</div>
+    <select id="preset"></select>
+    <div class="hint">切换预设会覆盖下方结构参数；手动改任一结构参数即进入自定义模式。</div>
+  </div>
+
+  <div class="grp">
+    <div class="grp-t">运行阶段</div>
+    <div class="seg" id="phaseSeg">
+      <button data-v="prefill" class="on">预填充 Prefill</button>
+      <button data-v="decode">解码 Decode</button>
+    </div>
+    <div class="row2" style="margin-top:10px">
+      <div class="fi"><label class="fl">批大小 B</label><input type="number" id="B" value="1" min="1" step="1"></div>
+      <div class="fi"><label class="fl" id="lbSeq">序列长度 S</label><input type="number" id="S" value="2048" min="1" step="128"></div>
+    </div>
+    <div id="ctxWrap" style="display:none">
+      <label class="fl">已缓存上下文长度 C（token 数）</label>
+      <input type="number" id="C" value="2048" min="1" step="128">
+    </div>
+    <div class="hint" id="phaseHint"></div>
+  </div>
+
+  <div class="grp">
+    <div class="grp-t">数值精度</div>
+    <select id="prec">
+      <option value="4">FP32 · 4 字节/参数</option>
+      <option value="2" selected>BF16 / FP16 · 2 字节/参数</option>
+      <option value="1">INT8 · 1 字节/参数</option>
+      <option value="0.5">INT4 · 0.5 字节/参数</option>
+    </select>
+  </div>
+
+  <div class="grp">
+    <div class="grp-t">模型结构</div>
+    <div class="row2">
+      <div class="fi"><label class="fl">层数 L</label><input type="number" id="L" value="32" min="1"></div>
+      <div class="fi"><label class="fl">隐藏维 d</label><input type="number" id="d" value="4096" min="16" step="64"></div>
+      <div class="fi"><label class="fl">注意力头数 H</label><input type="number" id="H" value="32" min="1"></div>
+      <div class="fi"><label class="fl">KV 头数 H<sub>kv</sub></label><input type="number" id="Hkv" value="32" min="1"></div>
+      <div class="fi"><label class="fl">FFN 中间维 d<sub>ff</sub></label><input type="number" id="dff" value="11008" min="16" step="128"></div>
+      <div class="fi"><label class="fl">词表 V</label><input type="number" id="V" value="32000" min="100" step="1000"></div>
+    </div>
+    <label class="fl">FFN 类型</label>
+    <select id="act" style="margin-bottom:8px">
+      <option value="swiglu" selected>SwiGLU（门控，3 个矩阵）</option>
+      <option value="gelu">GELU MLP（2 个矩阵）</option>
+    </select>
+    <label class="fl">归一化</label>
+    <select id="norm" style="margin-bottom:8px">
+      <option value="rms" selected>RMSNorm（仅 scale）</option>
+      <option value="ln">LayerNorm（scale + shift）</option>
+    </select>
+    <label class="fl">位置编码</label>
+    <select id="pos">
+      <option value="rope" selected>RoPE（旋转）</option>
+      <option value="learned">可学习绝对位置</option>
+      <option value="none">无</option>
+    </select>
+    <div class="hint">H<sub>kv</sub> &lt; H 即 GQA/MQA，直接减少 KV Cache 与 K/V 投影矩阵。</div>
+  </div>
+
+  <div class="grp">
+    <div class="grp-t">实现与硬件</div>
+    <label class="fl">目标硬件</label>
+    <select id="hw" style="margin-bottom:8px">
+      <option value="a100" selected>A100 80GB SXM · 312T / 2.04TB/s</option>
+      <option value="h100">H100 80GB SXM · 989T / 3.35TB/s</option>
+      <option value="rtx4090">RTX 4090 24GB · 165T / 1.01TB/s</option>
+      <option value="cpu">CPU · 2T / 80GB/s</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="flash" checked> FlashAttention（不物化 S×S 矩阵）</label>
+    <label class="chk"><input type="checkbox" id="train"> 训练视角（保留激活 + 优化器状态）</label>
+    <label class="chk"><input type="checkbox" id="ckpt"> 梯度检查点（激活重算）</label>
+  </div>
+
+  <div class="grp" style="background:var(--cdim);border:1px solid #C7D2FE;border-radius:10px;padding:12px;">
+    <div class="grp-t" style="color:var(--compute);margin-bottom:6px">当前配置快照</div>
+    <ul class="kv-list" id="snap" style="font-size:12px"></ul>
+  </div>
+</aside>
+
+<!-- ============ MAIN ============ -->
+<div class="main">
+<div class="hero">
+  <h1>Decoder-only LLM 前向计算分解</h1>
+  <p>把一次前向传播拆到每一个矩阵乘法，列出张量形状、FLOPs 与存储占用。<b>改左侧任意参数，全页数字实时重算</b>——建议先固定一个模型（如 LLaMA-7B），再逐个改序列长度、批大小、精度，观察哪一项在什么阶段变成瓶颈。</p>
+  <div class="tagrow">
+    <span class="tag">矩阵形状</span><span class="tag p">参数量</span><span class="tag">FLOPs</span>
+    <span class="tag g">显存占用</span><span class="tag r">KV Cache</span><span class="tag a">Prefill / Decode</span>
+  </div>
+  <div class="navlist" style="margin-top:14px">
+    <a href="#s1">1 记号约定</a><a href="#s2">2 两个阶段</a><a href="#s3">3 模型结构图</a><a href="#s4">4 逐步分解</a>
+    <a href="#s5">5 计算量汇总</a><a href="#s6">6 显存汇总</a><a href="#s7">7 KV Cache</a><a href="#s8">8 Roofline</a>
+    <a href="#s9">9 训练显存</a><a href="#s10">10 模型对照</a><a href="#s11">11 要点</a>
+  </div>
+</div>
+
+<!-- ---------- 1 记号 ---------- -->
+<section id="s1">
+  <h2 class="sh"><span class="n">01</span>记号与约定</h2>
+  <p class="sub">先统一符号，后面所有公式都基于这套记号。</p>
+
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>符号</th><th>含义</th><th class="n">当前值</th><th>备注</th></tr></thead>
+    <tbody id="tbl-nota"></tbody>
+  </table>
+  </div>
+
+  <h3>三条贯穿全文的计数约定</h3>
+  <div class="grid2">
+    <div class="card">
+      <h4>① 1 次乘加 = 2 FLOPs</h4>
+      <p style="font-size:12.5px;margin:0">矩阵乘 <span class="mono">(M×K)·(K×N)</span> 需要 M·K·N 次"乘 + 加"，记为 <b>2·M·K·N</b> FLOPs。这是整个领域的事实标准，所以后文所有数字都是<b>纯矩阵乘 FLOPs</b>。</p>
+    </div>
+    <div class="card">
+      <h4>② 非矩阵乘算子单独列出</h4>
+      <p style="font-size:12.5px;margin:0">Softmax、GELU/SiLU、RMSNorm、残差相加、RoPE 这些逐元素算子不计入矩阵乘 FLOPs，但在页面上单列——它们虽然计算量小，却是<b>显存带宽杀手</b>（每个元素都要读+写一遍）。</p>
+    </div>
+    <div class="card">
+      <h4>③ 精度 P 决定字节数</h4>
+      <p style="font-size:12.5px;margin:0">参数量 N 与激活量都是"元素个数"，乘以 P 字节才是显存。同一个模型 fp32 与 int4 的权重占用相差 <b>8 倍</b>，而 FLOPs 完全不变——这就是量化的本质。</p>
+    </div>
+    <div class="card">
+      <h4>④ 权重共享与偏置</h4>
+      <p style="font-size:12.5px;margin:0">本页对 GPT 系列默认 <b>embedding 与 LM head 权重共享</b>（少一份 V·d）；GPT-2 的 LayerNorm bias 与线性层 bias 被忽略，所以算出的 123.6M 比官方 124M 略小——<b>误差来自 bias，不是公式错</b>。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- 2 阶段 ---------- -->
+<section id="s2">
+  <h2 class="sh"><span class="n">02</span>两个运行阶段：Prefill 与 Decode</h2>
+  <p class="sub">同一份权重、同一套算子，但计算形态完全不同——这是理解 LLM 推理性能的第一关键。</p>
+
+  <div class="grid2">
+    <div class="card" style="border-left:3px solid var(--compute)">
+      <h4>Prefill（预填充 / 提示处理）</h4>
+      <ul class="kv-list" id="pfList"></ul>
+      <p style="font-size:12.5px;margin:10px 0 0">把整段 prompt 的 S 个 token <b>一次性并行</b>喂进去。<span class="mono">M = B·S</span> 很大，矩阵是"高瘦"的，算力吃满 → <b>计算密集（compute-bound）</b>。</p>
+    </div>
+    <div class="card" style="border-left:3px solid var(--kv)">
+      <h4>Decode（自回归解码）</h4>
+      <ul class="kv-list" id="dcList"></ul>
+      <p style="font-size:12.5px;margin:10px 0 0">每步只算 1 个新 token，<span class="mono">M = B</span>。矩阵退化成<b>向量×矩阵</b>，算术强度极低 → <b>显存带宽密集（memory-bound）</b>，算力利用率通常只有 <b>1% 量级</b>。</p>
+    </div>
+  </div>
+
+  <div class="note blue" id="phaseNote"></div>
+
+  <h3>同一段文本，两种阶段的算子形态对比</h3>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>阶段</th><th>矩阵行数 M</th><th>注意力矩阵形状</th><th>KV Cache 行为</th><th>瓶颈</th><th class="n">本页算出的时间</th></tr></thead>
+    <tbody id="tbl-phase"></tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ---------- 3 逐步分解 ---------- -->
+<section id="s3">
+  <h2 class="sh"><span class="n">03</span>模型结构图</h2>
+  <p class="sub">先把全貌看清楚，再钻进每一步的细节。图中每个节点的张量形状、FLOPs 与占比都随左侧参数实时更新——改一下层数或序列长度，可以直观看到哪一环在膨胀。</p>
+  <svg class="chart" id="archChart" viewBox="0 0 960 812" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="legend">
+    <span><i style="background:#EEF2FF;border:1px solid #C7D2FE"></i>矩阵乘投影（随 S 线性）</span>
+    <span><i style="background:#FEF7EC;border:1px solid #FDE68A"></i>注意力核心（随 S 平方）</span>
+    <span><i style="background:#ECFDF5;border:1px solid #A7F3D0"></i>逐元素 / 查表（无矩阵乘）</span>
+    <span><i style="background:#FEF2F3;border:1px solid #FECDD3"></i>KV Cache 写入点</span>
+    <span><i style="background:#F3EEFE;border:1px solid #DDD6FE"></i>词表输出</span>
+  </div>
+  <div class="note blue" id="archNote"></div>
+
+  <h3>结构层面的三个关键事实</h3>
+  <div class="grid2">
+    <div class="card"><h4>① 残差流是贯穿全程的"主干道"</h4>
+      <p style="font-size:12.5px;margin:0">图中两条左侧弧线就是残差连接。整个模型从头到尾维护着一条宽度恒为 <span class="mono">d = <span id="archD"></span></span> 的主干，每个子层只"往主干上加东西"。这解释了为什么隐藏维 d 如此关键：它既是信息通道宽度，又是几乎所有矩阵乘 FLOPs 的平方来源。</p></div>
+    <div class="card"><h4>② 只有第 ③ 步是全模型唯一的平方项</h4>
+      <p style="font-size:12.5px;margin:0">注意力矩阵宽度等于已缓存 token 数 <span class="mono">T = <span id="archT"></span></span>。除它以外，所有节点的计算量都只随 M 线性增长。<b>把长上下文的所有性能问题归结到这一个节点上，基本不会有遗漏。</b></p></div>
+    <div class="card"><h4>③ 权重是"每一层一份"，KV Cache 是"每一 token 一份"</h4>
+      <p style="font-size:12.5px;margin:0">Block 框内的权重有 <span class="mono">L = <span id="archL"></span></span> 份独立副本，恒定不变；而第 ②③ 步写入的 KV Cache 随每个新 token 增长 1 份。前者决定<b>模型能不能装下</b>，后者决定<b>能开多长的上下文、能并发多少用户</b>。</p></div>
+    <div class="card"><h4>④ 参数量只是一半的故事</h4>
+      <p style="font-size:12.5px;margin:0">当前结构参数 <span class="mono"><span id="archN"></span></span>，权重 <span class="mono"><span id="archW"></span></span>。但同一份权重在不同阶段的表现可以差两个数量级：Prefill 把算力打满，Decode 把带宽打满。<b>看结构图时要同时问一句"这是在哪个阶段跑"。</b></p></div>
+  </div>
+</section>
+
+<section id="s4">
+  <h2 class="sh"><span class="n">04</span>逐步前向计算分解</h2>
+  <p class="sub">从 token id 一路走到输出 logits。展开一个 Transformer Block，其余 L−1 层完全同构。所有数字随左侧参数实时变化。</p>
+  <div id="steps"></div>
+  <div class="note" style="border-left-color:var(--kv);background:var(--kdim);color:#881337">
+    <b>看这一列的规律：</b>第 3.6 / 3.7 步（QK<sup>T</sup> 与 AV）是唯一随序列长度<b>平方增长</b>的项；其余所有矩阵乘都只随 S <b>线性</b>增长。这就是长上下文代价的来源，也是 FlashAttention 要解决的问题——它不减少 FLOPs，只是不把那个 S×S 矩阵落到显存里。
+  </div>
+</section>
+
+<!-- ---------- 4 FLOPs 汇总 ---------- -->
+<section id="s5">
+  <h2 class="sh"><span class="n">05</span>计算量汇总与「2N 法则」校验</h2>
+  <p class="sub">把手算的矩阵乘 FLOPs 和经验公式 2·N·M 对一对，误差应该很小——如果对不上，说明漏了某一项。</p>
+
+  <div class="grid2">
+    <div class="card"><div class="k" style="font-size:11px;color:var(--ink3);font-weight:700;letter-spacing:.06em">本页逐项累加</div><div class="big c" id="sumFlops"></div><div class="tiny" id="sumFlops2"></div></div>
+    <div class="card"><div class="k" style="font-size:11px;color:var(--ink3);font-weight:700;letter-spacing:.06em">2·N·M 经验法则</div><div class="big m" id="sum2N"></div><div class="tiny" id="sum2N2"></div></div>
+  </div>
+
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>模块</th><th>矩阵运算</th><th class="n">FLOPs</th><th class="n">占比</th><th>随 S 的增长阶</th></tr></thead>
+    <tbody id="tbl-flops"></tbody>
+  </table>
+  </div>
+
+  <div id="flopsBar"></div>
+
+  <h3>把序列长度拉长，看谁涨得最快</h3>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th class="n" id="thScale">S</th><th class="n">线性项（投影+FFN）</th><th class="n">平方项（注意力）</th><th class="n">总 FLOPs</th><th class="n">平方项占比</th></tr></thead>
+    <tbody id="tbl-scale"></tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ---------- 5 显存汇总 ---------- -->
+<section id="s6">
+  <h2 class="sh"><span class="n">06</span>显存占用汇总</h2>
+  <p class="sub">推理显存 = 权重 + KV Cache + 中间激活 + 临时缓冲区。三者的增长规律完全不同：权重恒定、KV Cache 随上下文线性、激活随批大小线性。</p>
+
+  <div class="grid2" id="memCards"></div>
+
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>项目</th><th>计算式</th><th class="n">元素数</th><th class="n">显存</th><th>增长来源</th></tr></thead>
+    <tbody id="tbl-mem"></tbody>
+  </table>
+  </div>
+
+  <h3>单层激活张量明细</h3>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>张量</th><th>形状</th><th class="n">元素数</th><th class="n">显存</th><th>说明</th></tr></thead>
+    <tbody id="tbl-act"></tbody>
+  </table>
+  </div>
+  <div class="note green" id="actNote"></div>
+</section>
+
+<!-- ---------- 6 KV Cache ---------- -->
+<section id="s7">
+  <h2 class="sh"><span class="n">07</span>KV Cache 专题</h2>
+  <p class="sub">自回归生成的"作弊内存"——用显存换计算量，把 O(S²) 的重复计算降成 O(S)。</p>
+
+  <div class="eq" id="kvFormula"></div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="card"><h4>当前配置的 KV Cache</h4>
+      <div class="big k" id="kvTotal"></div>
+      <div class="tiny" id="kvPerTok"></div>
+      <ul class="kv-list" id="kvBreak"></ul>
+    </div>
+    <div class="card"><h4>K / V 张量形状</h4>
+      <ul class="kv-list" id="kvShapes"></ul>
+      <p style="font-size:12.5px;margin:10px 0 0" id="kvGqaNote"></p>
+    </div>
+  </div>
+
+  <h3>KV Cache 随上下文长度的增长（对数纵轴）</h3>
+  <svg class="chart" id="kvChart" viewBox="0 0 760 320" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="legend" id="kvLegend"></div>
+
+  <h3>为什么不缓存就活不下去</h3>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>方案</th><th>第 t 步注意力计算量</th><th>生成 C 个 token 的累计计算量</th><th class="n">相对开销</th><th>代价</th></tr></thead>
+    <tbody id="tbl-nocache"></tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ---------- 7 Roofline ---------- -->
+<section id="s8">
+  <h2 class="sh"><span class="n">08</span>Roofline：为什么 Decode 慢得离谱</h2>
+  <p class="sub">算术强度 (Arithmetic Intensity) = FLOPs ÷ 访存字节数。它落在脊点左侧就是带宽受限，右侧才是算力受限。</p>
+
+  <div class="eq" id="roofFormula"></div>
+
+  <svg class="chart" id="roofChart" viewBox="0 0 760 400" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="legend">
+    <span><i style="background:var(--mem)"></i>带宽屋顶（越陡的斜线）</span>
+    <span><i style="background:var(--compute)"></i>算力天花板（水平线）</span>
+    <span><i style="background:var(--kv)"></i>当前 Prefill 工作点</span>
+    <span><i style="background:var(--attn)"></i>当前 Decode 工作点</span>
+    <span><i style="background:#94A3B8"></i>脊点 (Peak FLOPs / BW)</span>
+  </div>
+
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>指标</th><th class="n">Prefill</th><th class="n">Decode（单 token）</th><th>解释</th></tr></thead>
+    <tbody id="tbl-roof"></tbody>
+  </table>
+  </div>
+
+  <div class="note" id="roofNote"></div>
+
+  <h3>批大小如何把 Decode 从带宽地狱里捞出来</h3>
+  <p style="font-size:13px">权重每个 token 只需读一次，但 <b>KV Cache 是每序列各读一份</b>。所以加大批大小 B：FLOPs 线性涨，权重访存不变 → 算术强度 ∝ B。这就是<b>连续批处理（continuous batching）</b>的物理依据。</p>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th class="n">B</th><th class="n">FLOPs / token</th><th class="n">访存字节</th><th class="n">算术强度</th><th class="n">受限于</th><th class="n">单序列 tok/s</th></tr></thead>
+    <tbody id="tbl-batch"></tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ---------- 8 训练显存 ---------- -->
+<section id="s9">
+  <h2 class="sh"><span class="n">09</span>训练阶段的显存：为什么是推理的 10 倍以上</h2>
+  <p class="sub">推理只需前向；训练要反传，就得把每一层的中间结果留在显存里等梯度。再叠加优化器状态，量级直接跳一个台阶。</p>
+
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>项目</th><th>计算式</th><th class="n">字节/参数</th><th class="n">显存</th><th>说明</th></tr></thead>
+    <tbody id="tbl-train"></tbody>
+  </table>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h4>纯权重（推理）</h4><div class="big m" id="trInf"></div><div class="tiny">仅需一份参数即可前向</div></div>
+    <div class="card"><h4>混合精度 Adam 训练（仅状态）</h4><div class="big a" id="trState"></div><div class="tiny">16 字节/参数，不包含激活</div></div>
+  </div>
+
+  <h3>激活显存：backward 必须留下的东西</h3>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>方案</th><th>保留内容</th><th class="n">激活显存</th><th class="n">相对基线</th><th>代价</th></tr></thead>
+    <tbody id="tbl-ckpt"></tbody>
+  </table>
+  </div>
+  <div class="note blue" id="trainNote"></div>
+</section>
+
+<!-- ---------- 9 模型对照 ---------- -->
+<section id="s10">
+  <h2 class="sh"><span class="n">10</span>经典模型对照表</h2>
+  <p class="sub">用同一套公式算出来的横截面。点任意行可把它设为左侧当前配置。</p>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>模型</th><th class="n">L</th><th class="n">d</th><th class="n">H / H<sub>kv</sub></th><th class="n">参数量</th><th class="n">权重 fp16</th><th class="n">KV/token</th><th class="n">2K 上下文 KV</th><th class="n">注意力占比@2K</th></tr></thead>
+    <tbody id="tbl-models"></tbody>
+  </table>
+  </div>
+  <div class="note"><b>读表要点：</b>参数量的绝大部分在 FFN 与 QKV/O 投影里（各占约 1/3 与 1/4）。而当 LLaMA-2-70B 用 GQA 把 KV 头数从 64 压到 8，KV/token 从 2.5MB 掉到 320KB——<b>参数量几乎不变，但服务成本降了 8 倍</b>。这是架构设计里最划算的一笔交易之一。</div>
+</section>
+
+<!-- ---------- 10 要点 ---------- -->
+<section id="s11">
+  <h2 class="sh"><span class="n">11</span>要点回顾</h2>
+  <div class="grid2" id="takeaways"></div>
+</section>
+
+<footer>所有数字由页面内的解析式计算得出，参数数量公式已与 GPT-2 small / XL、LLaMA-7B / 13B / 70B、GPT-3 175B 的官方规模核对一致。</footer>
+</div>
+</div>
+
+<script>
+"use strict";
+/* ============================ 预设 ============================ */
+const PRESETS = {
+  gpt2s :{label:"GPT-2 Small · 124M",            V:50257, d:768,  L:12, H:12, Hkv:12, dff:3072,  act:"gelu",   norm:"ln",  pos:"learned"},
+  gpt2xl:{label:"GPT-2 XL · 1.5B",               V:50257, d:1600, L:48, H:25, Hkv:25, dff:6400,  act:"gelu",   norm:"ln",  pos:"learned"},
+  gpt3  :{label:"GPT-3 · 175B",                  V:50257, d:12288,L:96, H:96, Hkv:96, dff:49152, act:"gelu",   norm:"ln",  pos:"learned"},
+  l7    :{label:"LLaMA-7B · 6.7B",               V:32000, d:4096, L:32, H:32, Hkv:32, dff:11008, act:"swiglu", norm:"rms", pos:"rope"},
+  l13   :{label:"LLaMA-2-13B · 13B",             V:32000, d:5120, L:40, H:40, Hkv:40, dff:13824, act:"swiglu", norm:"rms", pos:"rope"},
+  l70   :{label:"LLaMA-2-70B · 69B (GQA 8:1)",   V:32000, d:8192, L:80, H:64, Hkv:8,  dff:28672, act:"swiglu", norm:"rms", pos:"rope"},
+  mistral:{label:"Mistral-7B · 7.2B (GQA 4:1)",  V:32000, d:4096, L:32, H:32, Hkv:8,  dff:14336, act:"swiglu", norm:"rms", pos:"rope"},
+  gpt2m :{label:"GPT-2 Medium · 355M",           V:50257, d:1024, L:24, H:16, Hkv:16, dff:4096,  act:"gelu",   norm:"ln",  pos:"learned"}
+};
+const HW = {
+  a100:{label:"A100 80GB SXM", flops:312e12, bw:2039e9,  mem:80e9},
+  h100:{label:"H100 80GB SXM", flops:989e12, bw:3350e9,  mem:80e9},
+  rtx4090:{label:"RTX 4090 24GB", flops:165e12, bw:1008e9, mem:24e9},
+  cpu:{label:"CPU (DDR5 双通道)", flops:2e12, bw:80e9, mem:128e9}
+};
+
+/* ============================ 格式化 ============================ */
+const $ = id => document.getElementById(id);
+const nInt = v => Math.round(v).toLocaleString("en-US");
+/* SVG 演示属性不支持 var()，图表用具体色值 */
+const CLR = {compute:"#4F46E5", mem:"#0D9488", attn:"#B45309", kv:"#BE123C",
+             ink:"#0F172A", muted:"#94A3B8", grid:"#EFF1F4", soft:"#FAFBFC", faint:"#7A8698"};
+function fmtFlops(v,dec){
+  dec = dec===undefined?2:dec;
+  const a = Math.abs(v);
+  if(a>=1e15) return (v/1e15).toFixed(dec)+" PFLOPs";
+  if(a>=1e12) return (v/1e12).toFixed(dec)+" TFLOPs";
+  if(a>=1e9)  return (v/1e9 ).toFixed(dec)+" GFLOPs";
+  if(a>=1e6)  return (v/1e6 ).toFixed(dec)+" MFLOPs";
+  if(a>=1e3)  return (v/1e3 ).toFixed(dec)+" KFLOPs";
+  return v.toFixed(0)+" FLOPs";
+}
+function fmtB(v,dec){
+  dec = dec===undefined?2:dec;
+  const a=Math.abs(v);
+  if(a>=1e12) return (v/1e12).toFixed(dec)+" TB";
+  if(a>=1e9)  return (v/1e9 ).toFixed(dec)+" GB";
+  if(a>=1e6)  return (v/1e6 ).toFixed(dec)+" MB";
+  if(a>=1e3)  return (v/1e3 ).toFixed(dec)+" KB";
+  return v.toFixed(0)+" B";
+}
+function fmtN(v){
+  const a=Math.abs(v);
+  if(a>=1e9) return (v/1e9).toFixed(2)+"B";
+  if(a>=1e6) return (v/1e6).toFixed(1)+"M";
+  if(a>=1e3) return (v/1e3).toFixed(1)+"K";
+  return v.toFixed(0);
+}
+const pct = v => (v*100).toFixed(1)+"%";
+
+/* ============================ 读取配置 ============================ */
+let phase = "prefill";
+let presetKey = "l7";
+
+function readCfg(){
+  const iv = (id,min,dflt)=>{ const v = +$(id).value; return (isFinite(v)&&v>=min) ? v : dflt; };
+  const d=iv("d",16,4096), L=iv("L",1,32), H=iv("H",1,32);
+  const Hkv=Math.min(H, iv("Hkv",1,32));
+  const dff=iv("dff",16,11008), V=iv("V",100,32000);
+  const act=$("act").value, norm=$("norm").value, pos=$("pos").value;
+  const B=iv("B",1,1), S=iv("S",1,2048), C=iv("C",1,2048);
+  const P=(+$("prec").value)||2, hwKey=$("hw").value;
+  const flash=$("flash").checked, train=$("train").checked, ckpt=$("ckpt").checked;
+  const dh = d/H;
+  const dkv = Math.max(1, Math.round(Hkv*dh));
+  const M = phase==="prefill" ? B*S : B;
+  const T = phase==="prefill" ? S : C;          // 参与注意力的 key 数量
+  const Cctx = phase==="prefill" ? S : C;        // 缓存里的 token 数
+  return {d,L,H,Hkv,dh,dkv,dff,V,act,norm,pos,B,S,C,M,T,Cctx,P,hw:HW[hwKey]||HW.a100,hwKey,flash,train,ckpt};
+}
+
+/* ============================ 核心计算 ============================ */
+function compute(){
+  const c = readCfg();
+  const {d,L,H,Hkv,dh,dkv,dff,V,act,norm,pos,B,S,C,M,T,Cctx,P} = c;
+
+  /* ---- 参数量 ---- */
+  const pQ=d*d, pK=d*dkv, pV=d*dkv, pO=d*d, attnP=pQ+pK+pV+pO;
+  const normP = (norm==="rms"? d : 2*d);
+  const layerNormP = 2*normP;
+  const ffnP = (act==="swiglu") ? 3*d*dff : 2*d*dff;
+  const layerP = attnP + ffnP + layerNormP;
+  const coreP = L*layerP;
+  const embP = V*d;
+  const headTied = (norm==="ln");                // GPT 系列共享 embedding/LM head
+  const N = coreP + embP + normP + (headTied?0:embP);
+
+  /* ---- 每层矩阵乘 FLOPs ---- */
+  const mQKV   = 2*M*d*(d+2*dkv);
+  const mScore = 2*M*T*d;
+  const mAV    = 2*M*T*d;
+  const mO     = 2*M*d*d;
+  const mFFN1  = (act==="swiglu") ? 2*M*d*dff*2 : 2*M*d*dff;
+  const mFFN2  = 2*M*dff*d;
+  const perLayer = mQKV+mScore+mAV+mO+mFFN1+mFFN2;
+  const attnCore = mScore+mAV;
+
+  const totalCore = perLayer*L;                 // 所有层
+  const mLM   = 2*M*d*V;                        // LM head
+  const mTotal = totalCore + mLM;
+
+  /* ---- 非矩阵乘算子（近似） ---- */
+  const oNorm = 5*M*d*L*2;
+  const oSoftmax = 4*M*H*T*L;
+  const oAct = M*dff*(act==="swiglu"?3:1)*L;
+  const oRope = (pos==="rope") ? 6*M*d*L : 0;
+  const oResid = 2*M*d*L;
+  const oTotal = oNorm+oSoftmax+oAct+oRope+oResid;
+
+  /* ---- 权重显存 ---- */
+  const wBytes = N*P;
+
+  /* ---- KV Cache ---- */
+  const kvBytes = 2*L*dkv*Cctx*P;
+  const kvPerTok = 2*L*dkv*P;
+
+  /* ---- 激活显存（单层，推理） ---- */
+  const e = (el)=> el*P;
+  const actVec = [ ["x 残差流",M*d],["x_norm",M*d],["q",M*d],["k",M*dkv],["v",M*dkv],
+                   ["attn_out",M*d],["o 投影输出",M*d],
+                   ["FFN 中间层",M*dff*(act==="swiglu"?2:1)],["FFN 输出",M*d] ];
+  const actNoFlash = actVec.reduce((s,a)=>s+a[1],0) + M*H*T*2;   // + scores + probs
+  const actFlash   = actVec.reduce((s,a)=>s+a[1],0);
+  const actBytesPerLayer = (c.flash? actFlash : actNoFlash)*P;
+  const actBytesAll = actBytesPerLayer*L;                        // 训练时全保留
+  const logitsBytes = M*V*P;
+
+  /* ---- 推理总显存 ---- */
+  const bufBytes = actBytesPerLayer + logitsBytes;
+  const inferTotal = wBytes + kvBytes + bufBytes;
+
+  /* ---- 训练显存 ---- */
+  const stW16 = 2*N, stW32 = 4*N, stM = 4*N, stV = 4*N, stG = 2*N;
+  const trainState = stW16+stW32+stM+stV+stG;
+  const Mtr = B*S;                                             // 训练的激活按全序列算
+  const scaleAct = Mtr/M;
+  const trainActFull = actBytesAll*scaleAct;
+  const trainActCkpt = (Mtr*P*(d + (act==="swiglu"?2*dff:dff) + dkv*2))*L/ Math.sqrt(L) ; // ~√L
+  const trainActStd  = trainActFull;
+
+  /* ---- Roofline ---- */
+  const hw = c.hw;
+  const bytesPrefill = wBytes;
+  const bytesDecode  = wBytes + kvBytes;
+  const bytesNow     = (phase==="prefill") ? bytesPrefill : bytesDecode;
+  const ai      = mTotal / bytesNow;
+  const aiPrefill = (2*N*B*S + attnCore*L) / (wBytes);
+  const aiDecode  = (2*N*B + attnCore*L) / (wBytes + 2*L*dkv*Cctx*P);
+  const ridge   = hw.flops/hw.bw;
+  const tCompute = mTotal/hw.flops;
+  const tMemory  = bytesNow/hw.bw;
+  const time     = Math.max(tCompute,tMemory);
+  const bound    = tCompute>tMemory ? "计算受限" : "带宽受限";
+  const achieved = mTotal/Math.max(time,1e-12);
+  const util     = achieved/hw.flops;
+
+  /* 两种阶段各自的时间（用于对比表） */
+  const Mpf = B*S, Mdc = B;
+  const fpf = (2*Mpf*d*(d+2*dkv) + 2*Mpf*S*d*2 + 2*Mpf*d*d + ((act==="swiglu")?4*Mpf*d*dff:2*Mpf*d*dff) + 2*Mpf*dff*d)*L + 2*Mpf*d*V;
+  const fdc = (2*Mdc*d*(d+2*dkv) + 2*Mdc*Cctx*d*2 + 2*Mdc*d*d + ((act==="swiglu")?4*Mdc*d*dff:2*Mdc*d*dff) + 2*Mdc*dff*d)*L + 2*Mdc*d*V;
+  const tpf = Math.max(fpf/hw.flops, wBytes/hw.bw);
+  const tdc = Math.max(fdc/hw.flops, (wBytes+kvBytes)/hw.bw);
+  const tps = phase==="prefill" ? S/time : 1/time;
+
+  return {c,M,T,Cctx,N,P,d,L,H,Hkv,dh,dkv,dff,V,act,norm,B,S,
+    pQ,pK,pV,pO,attnP,ffnP,layerP,coreP,embP,normP,layerNormP,
+    mQKV,mScore,mAV,mO,mFFN1,mFFN2,perLayer,attnCore,totalCore,mLM,mTotal,
+    oNorm,oSoftmax,oAct,oRope,oResid,oTotal,
+    wBytes,kvBytes,kvPerTok,actVec,actBytesPerLayer,actBytesAll,logitsBytes,bufBytes,inferTotal,
+    stW16,stW32,stM,stV,stG,trainState,trainActStd,trainActCkpt,
+    ai,aiPrefill,aiDecode,ridge,tCompute,tMemory,time,bound,achieved,util,boundBytes:bytesNow,
+    fpf,fdc,tpf,tdc,tps,hw,
+    kvShapeQ:`[B, ${H}, S, ${dh}]`, kvShapeKV:`[B, ${Hkv}, S, ${dh}]`};
+}
+
+/* ============================ 渲染 ============================ */
+function renderAll(){
+  const R = compute();
+  renderSnap(R); renderNotation(R); renderPhase(R); renderDiagram(R); renderSteps(R);
+  renderFlops(R); renderScale(R); renderMem(R); renderActs(R);
+  renderKV(R); renderRoofline(R); renderBatch(R); renderTrain(R);
+  renderModels(); renderTakeaways();
+}
+
+/* --- 侧栏快照 --- */
+function renderSnap(R){
+  const c=R.c;
+  const items=[
+    ["阶段", phase==="prefill"?"Prefill":"Decode"],
+    ["批大小 × 序列", c.B+" × "+(phase==="prefill"?c.S:"1")],
+    ["矩阵行数 M", nInt(R.M)],
+    ["精度", c.P+" B/参数"],
+    ["参数量 N", fmtN(R.N)],
+    ["权重", fmtB(R.wBytes)],
+    ["KV Cache", fmtB(R.kvBytes)],
+    ["总 FLOPs", fmtFlops(R.mTotal)],
+    ["瓶颈", R.bound]
+  ];
+  $("snap").innerHTML = items.map(x=>`<li><span>${x[0]}</span><span>${x[1]}</span></li>`).join("");
+}
+
+/* --- 记号表 --- */
+function renderNotation(R){
+  const c=R.c;
+  const rows=[
+    ["B","批大小（并行序列数）",nInt(c.B),"Prefill 与 Decode 都影响，线性放大 FLOPs 与激活"],
+    ["S","序列长度（token 数）",nInt(c.S),"Prefill 一次处理 S 个；注意力项随 S² 增长"],
+    ["C","上下文长度（KV Cache 中的 token 数）",nInt(R.Cctx),"Decode 时每个 token 都要读完整 cache"],
+    ["M","当前矩阵乘法的行数 = B·S（prefill）或 B（decode）",nInt(R.M),"FLOPs 与它成正比，这是最关键的缩放变量"],
+    ["d","隐藏维 / 残差流宽度",nInt(c.d),"几乎所有矩阵乘 FLOPs 随 d² 增长"],
+    ["L","Transformer Block 层数",nInt(c.L),"FLOPs 与显存都随 L 线性增长"],
+    ["H","注意力头数",nInt(c.H),"不改变总 FLOPs，只改变头内形状"],
+    ["H<sub>kv</sub>","K/V 头数（GQA 中 &lt; H）",nInt(c.Hkv),"直接决定 KV Cache 与 K/V 投影矩阵大小"],
+    ["d<sub>h</sub>","单头维度 = d / H",nInt(R.dh),"乘以 H 还原为 d"],
+    ["d<sub>kv</sub>","K/V 的单头投影维度 = H<sub>kv</sub>·d<sub>h</sub>",nInt(R.dkv),"MHA 时等于 d；GQA 时远小于 d"],
+    ["d<sub>ff</sub>","FFN 中间层维度",nInt(c.dff),"SwiGLU 取 ≈ 8d/3，GELU MLP 取 4d，使两者 FLOPs 相当"],
+    ["V","词表大小",nInt(c.V),"只影响 embedding、LM head 与 logits"],
+    ["P","每元素字节数（精度）",c.P+" B","FP32=4，BF16/FP16=2，INT8=1，INT4=0.5"]
+  ];
+  $("tbl-nota").innerHTML = rows.map(r=>`<tr><td><span class="mono"><b>${r[0]}</b></span></td><td>${r[1]}</td><td class="n">${r[2]}</td><td class="tiny">${r[3]}</td></tr>`).join("");
+}
+
+/* --- 阶段 --- */
+function renderPhase(R){
+  const c=R.c;
+  const pf=[
+    ["输入 token 数", nInt(c.S*1)+" × B"+c.B],
+    ["矩阵行数 M", nInt(c.B*c.S)],
+    ["FLOPs", fmtFlops(R.fpf)],
+    ["读权重字节", fmtB(R.wBytes)+"（读一次）"],
+    ["理论耗时", (R.tpf*1000).toFixed(2)+" ms"],
+    ["吞吐", nInt(c.S*c.B/R.tpf)+" tok/s"]
+  ];
+  const dc=[
+    ["每步新 token 数", c.B+" 个（B 条序列各 1 个）"],
+    ["矩阵行数 M", nInt(c.B)],
+    ["FLOPs / token", fmtFlops(R.fdc)],
+    ["读权重 + KV", fmtB(R.wBytes)+" + "+fmtB(R.kvBytes)],
+    ["理论耗时 / token", (R.tdc*1000).toFixed(2)+" ms"],
+    ["吞吐", nInt(1/R.tdc)+" tok/s / 序列"]
+  ];
+  $("pfList").innerHTML = pf.map(x=>`<li><span>${x[0]}</span><span>${x[1]}</span></li>`).join("");
+  $("dcList").innerHTML = dc.map(x=>`<li><span>${x[0]}</span><span>${x[1]}</span></li>`).join("");
+
+  $("phaseNote").innerHTML = `当前处于 <b>${phase==="prefill"?"Prefill 预填充":"Decode 解码"}</b> 视角：`
+    + `矩阵行数 <b>M = ${nInt(R.M)}</b>，算术强度 <b>${R.ai.toFixed(2)} FLOP/Byte</b>，`
+    + `硬件脊点 <b>${R.ridge.toFixed(0)} FLOP/Byte</b> → <b>${R.bound}</b>。`
+    + (phase==="prefill"
+        ? ` 预填充阶段 M 很大，一段 ${nInt(c.S)} token 的 prompt 只读一次权重（${fmtB(R.wBytes)}），却做了 ${fmtFlops(R.mTotal)} 计算，因此算力利用率高、首 token 延迟（TTFT）主要由这段决定。`
+        : ` 解码阶段每生成 1 个 token 都要把全部权重（${fmtB(R.wBytes)}）从 HBM 搬到计算单元，而只做了 ${fmtFlops(R.mTotal)} 计算 —— 算力绝大部分时间在等内存。这就是 LLM 推理"越生成越慢"的物理原因。`);
+
+  const rows=[
+    ["Prefill", nInt(c.B*c.S), `[B, ${c.H}, ${c.S}, ${c.S}]`, "写入 S 个 token 的 K/V", "算力（compute-bound）", (R.tpf*1000).toFixed(2)+" ms"],
+    ["Decode", nInt(c.B), `[B, ${c.H}, ${c.B}, ${nInt(R.Cctx)}]`, `每步读 ${fmtB(R.kvBytes)}，追加 1 行`, "显存带宽（memory-bound）", (R.tdc*1000).toFixed(3)+" ms"]
+  ];
+  $("tbl-phase").innerHTML = rows.map(r=>`<tr><td><b>${r[0]}</b></td><td class="n">${r[1]}</td><td class="n">${r[2]}</td><td class="tiny">${r[3]}</td><td>${r[4]}</td><td class="n">${r[5]}</td></tr>`).join("");
+}
+
+/* --- 步骤卡 --- */
+function renderSteps(R){
+  const c=R.c, P=c.P;
+  const seqLabel = phase==="prefill" ? "B·S" : "B";
+  const M = R.M;
+  const S = phase==="prefill" ? c.S : 1;
+  const cards=[];
+
+  const card = (cls, idx, title, shape, body) => `
+  <div class="step ${cls}">
+    <div class="step-h"><span class="idx">${idx}</span><span class="ttl">${title}</span><span class="shp">${shape}</span></div>
+    ${body}
+  </div>`;
+  const mcell = (k,v,s,cls)=>`<div class="mcell ${cls||""}"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s||""}</div></div>`;
+
+  /* 0. Tokenizer */
+  cards.push(card("nomem","0","分词与 token id",
+    `[B, ${phase==="prefill"?c.S:1}] · int32`,
+    `<p>文本经 BPE/SentencePiece 切成 token，每个 token 映射为词表下标。这一步不涉及矩阵运算，但在工程上是真实开销（尤其长 prompt），且形状决定后续所有张量的序列维度。</p>
+     <div class="mtx">
+       ${mcell("输入 id 张量", nInt(M)+" 个整数", `[B, ${phase==="prefill"?c.S:1}]`, "m")}
+       ${mcell("存储（int32）", fmtB(M*4), "4 字节/元素", "m")}
+       ${mcell("矩阵乘 FLOPs", "0", "纯查表", "c")}
+     </div>`));
+
+  /* 1. Embedding */
+  cards.push(card("nomem","1","嵌入查表 Embedding Lookup",
+    `[B, S, ${nInt(c.d)}]`,
+    `<p>用 token id 在嵌入矩阵 <span class="mono">E</span> 中"按行取出"向量。它是查表而非矩阵乘，所以<b>没有 FLOPs</b>，但会一次性产生整个激活张量，是显存的第一笔支出。</p>
+     <div class="eq">E : [V, d] = [${nInt(c.V)}, ${nInt(c.d)}]
+X = E[token_ids]              →  [B, S, d] = [${c.B}, ${S}, ${nInt(c.d)}]</div>
+     <div class="mtx">
+       ${mcell("输入 id", `[B, ${S}]`, "", "m")}
+       ${mcell("嵌入矩阵 E", `[${nInt(c.V)}, ${nInt(c.d)}]`, nInt(c.embP)+" 参数", "c")}
+       ${mcell("输出激活 X", `[${c.B}, ${S}, ${nInt(c.d)}]`, nInt(R.M*c.d)+" 元素 = "+fmtB(R.M*c.d*P), "a")}
+       ${mcell("矩阵乘 FLOPs","0","查表操作","c")}
+     </div>
+     ${c.norm==="ln" && c.pos==="learned" ? `<p class="tiny">GPT 系列在此额外加上可学习的位置嵌入 <span class="mono">W_pos [S_max, d]</span>，以及一次 dropout。</p>` : ""}`));
+
+  /* 2. RMSNorm */
+  cards.push(card("nomem","2","归一化（RMSNorm / LayerNorm）",
+    `[B, S, ${nInt(c.d)}] → [B, S, ${nInt(c.d)}]`,
+    `<p>Pre-Norm 结构：每个子层前先归一化，保证残差流的数值尺度稳定。它是<b>逐元素算子</b>，不产生矩阵乘 FLOPs，但需要遍历整个 [B,S,d] 张量。</p>
+     <div class="eq">${c.norm==="rms"
+       ? `x̂ = x / sqrt(mean(x²) + ε) · γ          γ ∈ R^d          # 仅 scale，无 shift`
+       : `x̂ = (x − μ) / sqrt(σ² + ε) · γ + β      γ,β ∈ R^d        # scale + shift`}
+FLOPs ≈ 5 · ${seqLabel} · d ${c.norm==="ln"?"（含均值、方差、归一化、仿射）":"（含平方、求均值、开方、缩放）"}</div>
+     <div class="mtx">
+       ${mcell("输入 / 输出形状", `[${c.B}, ${S}, ${nInt(c.d)}]`, "逐元素，形状不变", "m")}
+       ${mcell("可学习参数", nInt(R.normP)+" 个 / 次", c.norm==="rms"?"仅 γ":"γ + β", "c")}
+       ${mcell("逐元素 FLOPs", fmtFlops(5*M*c.d), "不计入矩阵乘", "a")}
+       ${mcell("显存读写", fmtB(M*c.d*P)+" ×2", "读+写各一遍", "a")}
+     </div>
+     <p class="tiny">全模型 ${c.L} 层 × 2 次归一化，参数量合计 ${nInt(R.normP*2*c.L)} —— 占比极小，但显存访问次数很多。</p>`));
+
+  /* 3. QKV projection */
+  const gqa = c.Hkv < c.H;
+  cards.push(card("","3","Q / K / V 投影",
+    `${gqa?"Q [B,S,d]，K,V [B,S,"+nInt(R.dkv)+"]":"[B, S, 3d]"}`,
+    `<p>注意力子层的核心矩阵乘。用归一化后的 <span class="mono">x̂</span> 分别乘三个权重矩阵得到查询、键、值。</p>
+     <div class="eq">${gqa
+       ? `Q = x̂ · W_Q    (M×d) · (d×d)    →  [B, S, d]
+K = x̂ · W_K    (M×d) · (d×${nInt(R.dkv)})  →  [B, S, ${nInt(R.dkv)}]
+V = x̂ · W_V    (M×d) · (d×${nInt(R.dkv)})  →  [B, S, ${nInt(R.dkv)}]     ← GQA：K/V 投影被压窄`
+       : `QKV = x̂ · W_qkv   (M×d) · (d×3d)  →  [B, S, 3d]     ← MHA：可合并成一次大矩阵乘`}
+FLOPs = 2 · M · d · (d + 2·d_kv) = 2 · ${nInt(M)} · ${nInt(c.d)} · ${nInt(c.d+2*R.dkv)} = ${fmtFlops(R.mQKV)}</div>
+     <div class="mtx">
+       ${mcell("x̂", `[${nInt(M)}, ${nInt(c.d)}]`, "", "m")}
+       ${mcell("W_Q", `[${nInt(c.d)}, ${nInt(c.d)}]`, nInt(R.pQ)+" 参数", "c")}
+       ${mcell("W_K / W_V", `[${nInt(c.d)}, ${nInt(R.dkv)}] ×2`, nInt(R.pK+R.pV)+" 参数", "c")}
+       ${mcell("输出 Q,K,V", gqa?`[B,S,${nInt(c.d)}] + 2×[B,S,${nInt(R.dkv)}]`:"[B,S,3d]", "", "a")}
+       ${mcell("矩阵乘 FLOPs", fmtFlops(R.mQKV), pct(R.mQKV/R.mTotal)+" 总占比", "c")}
+     </div>
+     ${gqa?`<div class="note green" style="margin:10px 0 0"><b>GQA 省在哪：</b>H<sub>kv</sub>=${c.Hkv} &lt; H=${c.H}，W_K/W_V 从 <span class="mono">[d,d]</span> 缩到 <span class="mono">[d,${nInt(R.dkv)}]</span>，投影 FLOPs 与 KV Cache 同时缩小 ${(c.d/R.dkv).toFixed(1)} 倍。</div>`:""}`));
+
+  /* 4. 拆头 */
+  cards.push(card("nomem","4","拆头 / 重排（reshape + transpose）",
+    `[B, S, ${c.H}, ${R.dh}] → [B, ${c.H}, S, ${R.dh}]`,
+    `<p>把最后一维 <span class="mono">d=${nInt(c.d)}</span> 拆成 <span class="mono">H×d_h = ${c.H}×${R.dh}</span>，再把头维提到前面，让每个头独立做注意力。<b>这是纯视图操作</b>——内存里数据没动，只改 stride，所以 FLOPs 与显存占用都是 0。</p>
+     <div class="eq">Q : [B, S, H, d_h] → [B, H, S, d_h]
+K : [B, S, H_kv, d_h] → [B, H_kv, S, d_h]
+V : [B, S, H_kv, d_h] → [B, H_kv, S, d_h]
+FLOPs = 0    （只改 stride，不搬数据）</div>
+     <div class="mtx">
+       ${mcell("Q 重排后", `[B, ${c.H}, S, ${R.dh}]`, "元素数不变", "m")}
+       ${mcell("K / V 重排后", `[B, ${c.Hkv}, S, ${R.dh}]`, "元素数不变", "m")}
+       ${mcell("FLOPs", "0", "纯元数据操作", "c")}
+     </div>
+     <p class="tiny">注意：如果实现里做了连续的 <span class="mono">reshape/transpose+contiguous</span>，就会产生一次真实的内存拷贝（${fmtB(M*c.d*P)}），这是很多性能问题的隐藏来源。</p>`));
+
+  /* 5. RoPE */
+  cards.push(card("nomem","5","位置编码 RoPE（旋转位置编码）",
+    `[B, ${c.H}, S, ${R.dh}] → 同形状`,
+    c.pos==="rope"
+    ? `<p>把位置信息以"旋转"的方式注入 Q 和 K。对每一对相邻维度 <span class="mono">(x_{2i}, x_{2i+1})</span> 施加一个与位置 <span class="mono">m</span> 相关的二维旋转矩阵，使注意力分数天然带有相对位置信息，且 KV Cache 无需修改即可外推到更长位置。</p>
+       <div class="eq">对于位置 m 的第 i 对维度，旋转角 θ_i = m / 10000^(2i/d_h)
+[q'_2i    ]   [ cosθ_i  −sinθ_i ] [q_2i   ]
+[q'_2i+1 ] = [ sinθ_i   cosθ_i ] [q_2i+1 ]
+
+FLOPs ≈ 6 · M · d ${phase==="prefill"?"（预填充时 cos/sin 表可复用）":"（cos/sin 表通常预先算好并缓存）"}</div>
+       <div class="mtx">
+         ${mcell("作用对象", `Q, K`,`[B, ${c.H}, S, ${R.dh}]`, "m")}
+         ${mcell("cos/sin 表", `${nInt(R.dh/2)} × ${nInt(R.Cctx+1)} × 2`, "可预计算缓存", "c")}
+         ${mcell("逐元素 FLOPs", fmtFlops(6*M*c.d), "乘加各一次", "a")}
+       </div>`
+    : c.pos==="learned"
+    ? `<p>可学习绝对位置嵌入：在输入层直接加到 embedding 上（本页已在第 1 步计入），注意力层内不再有位置操作。</p>
+       <div class="eq">FLOPs = 0 ${phase==="decode"?"（Decode 时位置嵌入只取第 C 行）":""}</div>`
+    : `<p>本配置未使用位置编码。</p>`,));
+
+  /* 6. QK^T */
+  cards.push(card("attn","6","注意力分数 QKᵀ（含缩放与因果掩码）",
+    `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}]`,
+    `<p><b>全模型唯一随序列长度平方增长的矩阵乘。</b>每个 query 与所有历史 key 做内积，得到"该关注谁"的原始分数。</p>
+     <div class="eq">Scores = (Q · Kᵀ) / sqrt(d_h) ${phase==="prefill"?"+ causal_mask\n":"\n"}
+     每头: (${phase==="prefill"?c.S:1}×${R.dh}) · (${R.dh}×${nInt(R.Cctx)}) → (${phase==="prefill"?c.S:1}×${nInt(R.Cctx)})
+     全头: [B, ${c.H}, ${phase==="prefill"?c.S:1}, ${R.dh}] · [B, ${c.H}, ${R.dh}, ${nInt(R.Cctx)}]
+FLOPs = 2 · M · T · d = 2 · ${nInt(M)} · ${nInt(R.T)} · ${nInt(c.d)} = ${fmtFlops(R.mScore)}</div>
+     <div class="mtx">
+       ${mcell("Q", `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${R.dh}]`, "", "m")}
+       ${mcell("Kᵀ", `[B, ${c.Hkv}, ${R.dh}, ${nInt(R.Cctx)}]`, "广播到 H 个头", "m")}
+       ${mcell("Scores", `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}]`, nInt(c.B*c.H*(phase==="prefill"?c.S:1)*R.Cctx)+" 元素 = "+fmtB(c.B*c.H*(phase==="prefill"?c.S:1)*R.Cctx*P), "a")}
+       ${mcell("矩阵乘 FLOPs", fmtFlops(R.mScore), pct(R.mScore/R.mTotal)+" 总占比", "c")}
+       ${mcell("增长阶", "O(S²)", "唯一平方项", "a")}
+     </div>
+     <p class="tiny">因果掩码把上三角置为 −∞，因此有一半的乘法是"白算"的——<b>有效计算量约为上式的一半</b>，但 GPU 上仍按稠密矩阵执行，所以计费要按全额算。</p>`));
+
+  /* 7. Softmax */
+  cards.push(card("attn","7","Softmax（行归一化）",
+    `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}] → 同形状`,
+    `<p>沿最后一个维度（key 维度）做归一化，把分数变成和为 1 的注意力权重。为了让数值稳定，实现上先减去每行最大值。</p>
+     <div class="eq">A = softmax(Scores, dim = -1)
+  = exp(Scores − max) / Σ exp(Scores − max)
+
+FLOPs ≈ 4 · B · H · S · T = ${fmtFlops(R.oSoftmax/R.c.L)}  （逐元素，非矩阵乘）</div>
+     <div class="mtx">
+       ${mcell("输入 / 输出形状", `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}]`, "形状不变", "m")}
+       ${mcell("逐元素 FLOPs", fmtFlops(R.oSoftmax), pct(R.oSoftmax/R.mTotal)+" 相对矩阵乘", "a")}
+       ${mcell("显存读写", fmtB(c.B*c.H*(phase==="prefill"?c.S:1)*R.Cctx*P)+" ×2", "读分数 + 写权重", "a")}
+     </div>
+     <p class="tiny">Softmax 的 FLOPs 可以忽略，但它必须把整个 <span class="mono">[B,H,S,T]</span> 矩阵读进来再写出去 —— <b>在长上下文里它是纯带宽开销</b>。FlashAttention 的关键贡献之一就是把 softmax 融进矩阵乘的循环里，不落显存。</p>`));
+
+  /* 8. AV */
+  cards.push(card("attn","8","加权求和 AV",
+    `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${R.dh}]`,
+    `<p>用注意力权重对 Value 做加权平均，得到每个位置的上下文表示。与第 6 步对称，同样是 O(S²) 项。</p>
+     <div class="eq">O = A · V
+     每头: (${phase==="prefill"?c.S:1}×${nInt(R.Cctx)}) · (${nInt(R.Cctx)}×${R.dh}) → (${phase==="prefill"?c.S:1}×${R.dh})
+FLOPs = 2 · M · T · d = 2 · ${nInt(M)} · ${nInt(R.T)} · ${nInt(c.d)} = ${fmtFlops(R.mAV)}</div>
+     <div class="mtx">
+       ${mcell("A 注意力权重", `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}]`, "", "a")}
+       ${mcell("V", `[B, ${c.Hkv}, ${nInt(R.Cctx)}, ${R.dh}]`, "", "m")}
+       ${mcell("输出 O", `[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${R.dh}]`, nInt(M*c.d)+" 元素", "m")}
+       ${mcell("矩阵乘 FLOPs", fmtFlops(R.mAV), pct(R.mAV/R.mTotal)+" 总占比", "c")}
+     </div>`));
+
+  /* 9. O proj */
+  cards.push(card("","9","输出投影 W_O + 残差连接",
+    `[B, S, ${nInt(c.d)}] → [B, S, ${nInt(c.d)}]`,
+    `<p>把所有头的结果拼接回 <span class="mono">d</span> 维，再乘输出投影矩阵混合各头信息，最后加回残差流。至此注意力子层结束。</p>
+     <div class="eq">Z = concat(head_1, ..., head_H)      → [B, S, d]
+Attn = Z · W_O                       (M×d) · (d×d)  →  [B, S, d]
+x = x + Attn                         ← 残差连接
+
+FLOPs(W_O) = 2 · M · d · d = 2 · ${nInt(M)} · ${nInt(c.d)}² = ${fmtFlops(R.mO)}
+FLOPs(残差)  = M · d = ${fmtFlops(R.oResid/R.c.L)}（逐元素加法）</div>
+     <div class="mtx">
+       ${mcell("W_O", `[${nInt(c.d)}, ${nInt(c.d)}]`, nInt(R.pO)+" 参数", "c")}
+       ${mcell("矩阵乘 FLOPs", fmtFlops(R.mO), pct(R.mO/R.mTotal)+" 总占比", "c")}
+       ${mcell("残差加法", fmtFlops(R.oResid/R.c.L), "逐元素，带宽开销", "a")}
+     </div>
+     <p class="tiny">注意力子层参数合计 <span class="mono">${nInt(R.attnP)}</span> 个，占单层 ${pct(R.attnP/R.layerP)}；矩阵乘 FLOPs 合计 ${fmtFlops(R.mQKV+R.mScore+R.mAV+R.mO)}，占单层 ${pct((R.mQKV+R.mScore+R.mAV+R.mO)/R.perLayer)}。</p>`));
+
+  /* 10. FFN */
+  const sw = c.act==="swiglu";
+  cards.push(card("","10","前馈网络 FFN / MLP",
+    `[B, S, ${nInt(c.d)}] → [B, S, ${nInt(c.dff)}] → [B, S, ${nInt(c.d)}]`,
+    `<p>先"升维"到 <span class="mono">d_ff</span> 做非线性变换，再"降维"回 <span class="mono">d</span>。这是<b>参数最多、FLOPs 最大的模块</b>。</p>
+     <div class="eq">${sw
+       ? `# SwiGLU（LLaMA / Mistral 等）：三个矩阵，中间有两个并行支路
+gate = x̂ · W_gate    (M×d) · (d×d_ff)   →  [B, S, ${nInt(c.dff)}]
+up   = x̂ · W_up      (M×d) · (d×d_ff)   →  [B, S, ${nInt(c.dff)}]
+h    = SiLU(gate) ⊙ up                  ← 逐元素门控
+down = h · W_down    (M×d_ff) · (d_ff×d) →  [B, S, ${nInt(c.d)}]`
+       : `# GELU MLP（GPT 系列）：两个矩阵
+h    = GELU(x̂ · W_1)   (M×d) · (d×d_ff)   →  [B, S, ${nInt(c.dff)}]
+down = h · W_2         (M×d_ff) · (d_ff×d) →  [B, S, ${nInt(c.d)}]`}
+x = x + down                            ← 残差连接
+
+FLOPs = ${sw?"4·M·d·d_ff + 2·M·d_ff·d":"2·M·d·d_ff + 2·M·d_ff·d"} = ${fmtFlops(R.mFFN1+R.mFFN2)}</div>
+     <div class="mtx">
+       ${mcell("W_gate / W_up".replace("W_gate / W_up", sw?"W_gate + W_up":"W_1"), `[${nInt(c.d)}, ${nInt(c.dff)}]`, nInt(sw?2*c.d*c.dff:c.d*c.dff)+" 参数", "c")}
+       ${mcell("W_down", `[${nInt(c.dff)}, ${nInt(c.d)}]`, nInt(c.dff*c.d)+" 参数", "c")}
+       ${mcell("中间激活 h", `[B, S, ${nInt(c.dff)}]`, nInt(M*c.dff)+" 元素 = "+fmtB(M*c.dff*P), "a")}
+       ${mcell("升维矩阵乘", fmtFlops(R.mFFN1), pct(R.mFFN1/R.mTotal)+" 总占比", "c")}
+       ${mcell("降维矩阵乘", fmtFlops(R.mFFN2), pct(R.mFFN2/R.mTotal)+" 总占比", "c")}
+       ${mcell("激活函数算子", fmtFlops(R.oAct/R.c.L), sw?"SiLU + 逐元素乘":"GELU", "a")}
+     </div>
+     <p class="tiny">FFN 参数合计 <span class="mono">${nInt(R.ffnP)}</span>，占单层 ${pct(R.ffnP/R.layerP)}<span class="mono">；</span>FLOPs 占单层 ${pct((R.mFFN1+R.mFFN2)/R.perLayer)}。<b>无论用 GELU 还是 SwiGLU，只要 d_ff 取 4d 或 8d/3，FFN 的矩阵乘 FLOPs 都恰好是 16·M·d²</b> —— 这是设计上的刻意平衡。</p>`));
+
+  /* 11. 循环 */
+  cards.push(card("nomem","11",`重复 L = ${c.L} 次（第 2 ~ 10 步）`,
+    `× ${c.L} 层`,
+    `<p>整个 Transformer Block 被堆叠 <span class="mono">L=${c.L}</span> 次。层与层之间<b>结构完全相同但权重独立</b>，所以参数量、FLOPs 与激活显存都随 L 线性增长。</p>
+     <div class="eq">单层参数量 : ${nInt(R.layerP)}
+单层矩阵乘 FLOPs : ${fmtFlops(R.perLayer)}
+${c.L} 层总计   : ${nInt(R.coreP)} 参数，${fmtFlops(R.totalCore)} FLOPs
+
+其中每层：
+  注意力投影(QKV+O) : ${fmtFlops(R.mQKV+R.mO)}
+  注意力核心(QKᵀ+AV) : ${fmtFlops(R.attnCore)}
+  FFN              : ${fmtFlops(R.mFFN1+R.mFFN2)}
+  归一化           : ${nInt(R.layerNormP)} 参数（FLOPs 可忽略）</div>
+     <div class="mtx">
+       ${mcell("层数 L", nInt(c.L), "", "m")}
+       ${mcell("核心参数量", nInt(R.coreP), pct(R.coreP/R.N)+" 总参数", "c")}
+       ${mcell("核心 FLOPs", fmtFlops(R.totalCore), pct(R.totalCore/R.mTotal)+" 总 FLOPs", "c")}
+     </div>`));
+
+  /* 12. 最终归一化 */
+  cards.push(card("nomem","12","最终归一化",
+    `[B, S, ${nInt(c.d)}]`,
+    `<p>所有层结束后再做一次归一化，把残差流的数值尺度调回合理范围，然后送去 LM head。</p>
+     <div class="eq">x = ${c.norm==="rms"?"RMSNorm":"LayerNorm"}(x)      → [B, S, ${nInt(c.d)}]
+参数量 = ${nInt(R.normP)}    FLOPs ≈ ${fmtFlops(5*M*c.d)}（逐元素）</div>
+     <div class="mtx">${mcell("参数量", nInt(R.normP)+" 个", "整个模型只有这一份", "c")}
+       ${mcell("逐元素 FLOPs", fmtFlops(5*M*c.d), "", "a")}</div>`));
+
+  /* 13. LM head */
+  cards.push(card("","13","语言模型头 LM Head → logits",
+    `[B, S, ${nInt(c.d)}] → [B, S, ${nInt(c.V)}]`,
+    `<p>把隐藏状态投影到词表维度，得到每个位置对每个 token 的分数（logits）。<b>这是预填充阶段最容易被忽视的大头</b>：它随序列长度线性增长，且输出维度是词表大小。</p>
+     <div class="eq">logits = x · Eᵀ     (M×d) · (d×V)  →  [B, S, ${nInt(c.V)}]
+${c.norm==="ln"?"（GPT 系列与嵌入矩阵共享权重 E，省下 V·d 参数）":"（独立权重，额外占用 V·d 参数）"}
+
+FLOPs = 2 · M · d · V = 2 · ${nInt(M)} · ${nInt(c.d)} · ${nInt(c.V)} = ${fmtFlops(R.mLM)}</div>
+     <div class="mtx">
+       ${mcell("权重", c.norm==="ln"?"共享 E":"独立 W_lm", `[${nInt(c.V)}, ${nInt(c.d)}]`, "c")}
+       ${mcell("输出 logits", `[B, S, ${nInt(c.V)}]`, nInt(M*c.V)+" 元素 = "+fmtB(M*c.V*P), "a")}
+       ${mcell("矩阵乘 FLOPs", fmtFlops(R.mLM), pct(R.mLM/R.mTotal)+" 总占比", "c")}
+     </div>
+     ${phase==="prefill" && R.mLM/R.mTotal>0.05 ? `<div class="note" style="margin:10px 0 0"><b>预填充专属陷阱：</b>此配置下 LM head 占了总 FLOPs 的 ${pct(R.mLM/R.mTotal)}，还额外产生 ${fmtB(M*c.V*P)} 的 logits 张量。但在生成任务中<b>只有最后一个位置的 logits 有用</b>，因此推理引擎通常只对最后一个 token 计算 LM head，能把这一项从 ${fmtFlops(R.mLM)} 降到 ${fmtFlops(2*c.B*c.d*c.V)}。</div>`:""}`));
+
+  /* 14. 采样 */
+  cards.push(card("nomem","14","采样与下一步输入",
+    `[B, ${nInt(c.V)}] → [B, 1]`,
+    `<p>对最后一个位置的 logits 做温度缩放、top-k / top-p 截断，再用 softmax 转成概率分布并采样出下一个 token。采样出的 token 追加到序列末尾，进入下一轮 Decode —— 这就是"自回归"的闭环。</p>
+     <div class="eq">p = softmax(logits / T)
+token_next ~ Categorical(p)      →  追加到序列末尾
+FLOPs ≈ O(V) = ${fmtFlops(c.V)}    （相对整个前向可忽略）</div>
+     <div class="mtx">
+       ${mcell("输入 logits", `[B, ${nInt(c.V)}]`, "仅取最后位置", "m")}
+       ${mcell("输出", `[B, 1]`, "新 token id", "m")}
+       ${mcell("采样 FLOPs", "≈ "+fmtFlops(c.V*5), "逐元素", "a")}
+     </div>
+     <p class="tiny">采样本身几乎不花算力，但它决定了整个推理循环的<b>串行性</b>：必须等这一步结束才能开始下一步，这也是 Decode 无法被充分并行的根本原因。</p>`));
+
+  $("steps").innerHTML = cards.join("");
+}
+
+/* --- 模型结构图 --- */
+function renderDiagram(R){
+  const c=R.c;
+  const Srow = phase==="prefill" ? c.S : 1;
+  const T    = phase==="prefill" ? c.S : R.Cctx;
+  const LX=24, LW=470, ix=46, iw=388, cx=244;
+  const AXa=520, AWa=416;
+  const Y0=200, RH=48, GAP=14;
+  const rowY = i => Y0+i*(RH+GAP), rowC = i => rowY(i)+RH/2;
+  const blockTop=154, blockBot=Y0+6*RH+5*GAP+16;
+
+  const STY={
+    proj :{f:"#F8FAFF", s:"#C7D2FE", a:"#4F46E5"},
+    elem :{f:"#F4FDFA", s:"#A7F3D0", a:"#0D9488"},
+    attn :{f:"#FFFCF4", s:"#FDE68A", a:"#B45309"},
+    vocab:{f:"#FAF8FF", s:"#DDD6FE", a:"#7C3AED"}
+  };
+  const tx=(x,y,t,o)=>{ o=o||{}; return `<text x="${x}" y="${y}" font-size="${o.fs||12}" fill="${o.c||CLR.ink}"`
+    + ` text-anchor="${o.anchor||"start"}"${o.w?` font-weight="${o.w}"`:""}`
+    + `${o.mono?' font-family="ui-monospace,Consolas,monospace"':""}>${t}</text>`; };
+  const arw=(x,y1,y2)=>`<line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>`;
+  const outer=(y,h,label,sub,st)=>{
+    const s=STY[st], b=y+h/2+4.5;
+    return `<rect x="${LX}" y="${y}" width="${LW}" height="${h}" rx="9" fill="${s.f}" stroke="${s.s}"/>`
+      + tx(LX+18,b,label,{fs:13,w:600}) + tx(LX+LW-18,b,sub,{fs:11,c:"#64748B",anchor:"end",mono:1});
+  };
+  const row=(i,label,st)=>{
+    const s=STY[st], y=rowY(i);
+    return `<rect x="${ix}" y="${y}" width="${iw}" height="${RH}" rx="9" fill="${s.f}" stroke="${s.s}"/>`
+      + `<rect x="${ix}" y="${y}" width="3" height="${RH}" rx="1.5" fill="${s.a}"/>`
+      + tx(ix+16, y+RH/2+4.5, label, {fs:12.5,w:600});
+  };
+  const annot=(y,shape,flops,pctTxt,col)=>{
+    return `<rect x="${AXa}" y="${y}" width="${AWa}" height="${RH}" rx="9" fill="#FAFBFC" stroke="#E4E7EC"/>`
+      + `<rect x="${AXa}" y="${y}" width="3.5" height="${RH}" rx="2" fill="${col}"/>`
+      + tx(AXa+16, y+21, shape, {fs:11.5,mono:1})
+      + tx(AXa+16, y+38, flops, {fs:11,c:"#64748B",mono:1})
+      + (pctTxt?tx(AXa+AWa-14, y+30, pctTxt, {fs:12,anchor:"end",mono:1,w:700,c:col}):"");
+  };
+  /* 行 → 注释 的对齐虚线 */
+  const link=(y)=>`<line x1="${LX+LW}" y1="${y}" x2="${AXa-4}" y2="${y}" stroke="#E4E7EC" stroke-width="1" stroke-dasharray="2 3"/>`;
+
+  const p = v => pct(v/R.mTotal);
+  let g="";
+
+  g+=`<defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8"/></marker>
+    <marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B5CF6"/></marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#BE123C"/></marker>
+  </defs>`;
+
+  /* ---- 主干：输入 / 嵌入 ---- */
+  g+=outer(14,44,"输入 token ids",`[B, ${Srow}] · int32`,"elem");
+  g+=arw(cx,58,84);
+  g+=outer(84,44,`Embedding 查表　E [${nInt(c.V)}, ${nInt(c.d)}]`,`X : [B, ${Srow}, ${nInt(c.d)}]`,"elem");
+  g+=arw(cx,128,blockTop);
+
+  /* ---- Transformer Block ---- */
+  g+=`<rect x="${LX}" y="${blockTop}" width="${LW}" height="${blockBot-blockTop}" rx="14" fill="#FBFAFF" stroke="#DDD6FE" stroke-width="1.5"/>`;
+  g+=tx(cx,blockTop+24,`Transformer Block　×　L = ${c.L}`,{fs:13.5,w:700,c:"#6D28D9",anchor:"middle"});
+  g+=`<line x1="${LX+18}" y1="${blockTop+32}" x2="${LX+LW-18}" y2="${blockTop+32}" stroke="#EDE9FE"/>`;
+  g+=arw(cx,blockTop+32,Y0);
+
+  /* 残差弧线 */
+  const arc=(a,b)=>`<path d="M ${ix},${rowC(a)} H 40 Q 34,${rowC(a)} 34,${rowC(a)+7} V ${rowC(b)-7} Q 34,${rowC(b)} 40,${rowC(b)} H ${ix}"`
+    + ` fill="none" stroke="#8B5CF6" stroke-width="1.5" marker-end="url(#ak)"/>`;
+  g+=arc(0,3)+arc(4,5);
+
+  const rows=[
+    ["① 归一化　RMSNorm / LayerNorm","elem"],
+    ["② QKV 投影 → 拆头 → RoPE","proj"],
+    ["③ 注意力　QKᵀ · softmax · AV","attn"],
+    ["④ 输出投影 W_O　⊕ 残差","proj"],
+    ["⑤ 归一化　RMSNorm / LayerNorm","elem"],
+    ["⑥ FFN 升维 → 激活 → 降维　⊕ 残差","proj"]
+  ];
+  rows.forEach((r,i)=>{ g+=row(i,r[0],r[1]); if(i<5) g+=arw(cx,rowY(i)+RH,rowY(i+1)); });
+  g+=arw(cx,rowY(5)+RH,blockBot);
+
+  /* KV Cache 竖柱 */
+  const kvTop=rowY(0)+6, kvH=(rowY(5)+RH-6)-kvTop;
+  g+=`<rect x="448" y="${kvTop}" width="32" height="${kvH}" rx="10" fill="#FEF2F3" stroke="#FECDD3"/>`;
+  g+=`<g transform="translate(464,${kvTop+kvH/2}) rotate(-90)" text-anchor="middle">`
+    + tx(0,-5,"KV Cache",{fs:11,w:700,c:"#BE123C"})
+    + tx(0,9,fmtB(R.kvBytes),{fs:10,c:"#BE123C",mono:1}) + `</g>`;
+  g+=`<line x1="${ix+iw}" y1="${rowC(1)}" x2="448" y2="${rowC(1)}" stroke="#BE123C" stroke-width="1.5" marker-end="url(#ar)"/>`;
+  g+=`<line x1="${ix+iw}" y1="${rowC(2)}" x2="448" y2="${rowC(2)}" stroke="#BE123C" stroke-width="1.5" marker-end="url(#ar)"/>`;
+
+  /* ---- 主干：尾部 ---- */
+  const normY=blockBot+26;
+  g+=outer(normY,44,"最终归一化",`[B, ${Srow}, ${nInt(c.d)}]`,"elem");
+  g+=arw(cx,blockBot,normY);
+  g+=outer(normY+70,44,`LM Head　Eᵀ [${nInt(c.d)}, ${nInt(c.V)}]`,`logits : [B, ${Srow}, ${nInt(c.V)}]`,"vocab");
+  g+=arw(cx,normY+44,normY+70);
+  g+=outer(normY+140,44,"采样 → 下一个 token",`[B, ${nInt(c.V)}] → [B, 1]`,"elem");
+  g+=arw(cx,normY+114,normY+140);
+
+  /* ---- 右侧注释列 ---- */
+  g+=link(14+22)+link(84+22)+link(rowC(0))+link(rowC(1))+link(rowC(2))+link(rowC(3))+link(rowC(4))+link(rowC(5))
+    +link(normY+22)+link(normY+70+22)+link(normY+140+22);
+  g+=annot(14,  `[B, ${Srow}]`, "无矩阵乘（整数索引）", "", "#94A3B8");
+  g+=annot(84,  `[B, ${Srow}, ${nInt(c.d)}]`, `查表　E [${nInt(c.V)}, ${nInt(c.d)}] · ${nInt(R.embP)} 参数`, "", "#0D9488");
+  g+=annot(rowY(0), `[${nInt(R.M)}, ${nInt(c.d)}] → 同形`, `逐元素 ≈ ${fmtFlops(5*R.M*c.d)}`, "", "#0D9488");
+  g+=annot(rowY(1), `[${nInt(R.M)}, ${nInt(c.d)}] · [${nInt(c.d)}, ${nInt(c.d+2*R.dkv)}]`, `QKV 投影　${fmtFlops(R.mQKV)}`, p(R.mQKV), "#4F46E5");
+  g+=annot(rowY(2), `[B, ${c.H}, ${Srow}, ${nInt(T)}] 注意力矩阵`, `QKᵀ + AV　${fmtFlops(R.attnCore)}`, p(R.attnCore), "#B45309");
+  g+=annot(rowY(3), `[${nInt(R.M)}, ${nInt(c.d)}] · [${nInt(c.d)}, ${nInt(c.d)}]`, `输出投影　${fmtFlops(R.mO)}`, p(R.mO), "#4F46E5");
+  g+=annot(rowY(4), `[${nInt(R.M)}, ${nInt(c.d)}] → 同形`, `逐元素 ≈ ${fmtFlops(5*R.M*c.d)}`, "", "#0D9488");
+  g+=annot(rowY(5), `[${nInt(R.M)}, ${nInt(c.d)}] · [${nInt(c.d)}, ${nInt(c.dff)}]`, `FFN 升维 + 降维　${fmtFlops(R.mFFN1+R.mFFN2)}`, p(R.mFFN1+R.mFFN2), "#4F46E5");
+  g+=annot(normY,        `[${nInt(R.M)}, ${nInt(c.d)}] → 同形`, "逐元素归一化", "", "#0D9488");
+  g+=annot(normY+70,     `[${nInt(R.M)}, ${nInt(c.d)}] · [${nInt(c.d)}, ${nInt(c.V)}]`, `词表投影　${fmtFlops(R.mLM)}`, p(R.mLM), "#7C3AED");
+  g+=annot(normY+140,    `[B, ${nInt(c.V)}]`, `采样 ≈ O(V)`, "", "#0D9488");
+
+  /* 阶段徽标 */
+  const badge = phase==="prefill" ? "Prefill · M = B·S" : "Decode · M = B";
+  $("archChart").innerHTML = `<g font-family="'Segoe UI','Noto Sans SC','Microsoft YaHei',sans-serif">${g}</g>`;
+
+  /* 侧栏文案里的动态数字 */
+  const set=(id,v)=>{ const e=$(id); if(e) e.textContent=v; };
+  set("archD", nInt(c.d));
+  set("archT", nInt(T));
+  set("archL", nInt(c.L));
+  set("archN", fmtN(R.N));
+  set("archW", fmtB(R.wBytes));
+
+  const sqShare = R.attnCore/R.mTotal;
+  $("archNote").innerHTML = `当前视角 <b>${badge}</b>。从图上往下读一遍，就是一次完整的自回归前向传播。`
+    + `注意 <b>③ 注意力</b> 那个节点：它的宽度是已缓存的 token 数 <b>T = ${nInt(T)}</b>，而其他所有节点只跟矩阵行数 <b>M = ${nInt(R.M)}</b> 有关。`
+    + `此刻注意力占全部计算量的 <b>${pct(sqShare)}</b>${sqShare>0.3?" —— 在长上下文里它已经反客为主":""}。`
+    + `另外，<b>② 和 ③ 向右伸出的红色箭头</b>就是 KV Cache 的写入点：每生成一个 token，这两处就往右侧那根柱子追加一份数据（每个 token ${fmtB(R.kvPerTok)}），永远不会被释放。`;
+}
+
+/* --- FLOPs 汇总 --- */
+function renderFlops(R){
+  $("sumFlops").textContent = fmtFlops(R.mTotal);
+  $("sumFlops2").textContent = `= ${nInt(R.mTotal)} FLOPs · M = ${nInt(R.M)}（${phase==="prefill"?"B·S":"B"}）· 矩阵乘部分`;
+  const rule = 2*R.N*R.M;
+  $("sum2N").textContent = fmtFlops(rule);
+  const err = (R.mTotal/rule-1);
+  $("sum2N2").innerHTML = `= 2 × ${fmtN(R.N)} × ${nInt(R.M)}　偏差 <b style="color:${Math.abs(err)<0.05?"var(--ok)":"var(--kv)"}">${(err*100>=0?"+":"")}${(err*100).toFixed(2)}%</b>，来自注意力平方项与归一化/激活的零头`;
+
+  const rows=[
+    ["QKV 投影", `(M×d)·(d×${c3(R.c.d)}${R.c.Hkv<R.c.H?" + 2×d×d_kv":""})`, R.mQKV, "O(S)"],
+    ["注意力 QKᵀ", `(M×d_h)·(d_h×T) ×${R.c.H}`, R.mScore, "O(S²)"],
+    ["加权求和 AV", `(M×T)·(T×d_h) ×${R.c.H}`, R.mAV, "O(S²)"],
+    ["输出投影 W_O", "(M×d)·(d×d)", R.mO, "O(S)"],
+    ["FFN 升维", `(M×d)·(d×${nInt(R.c.dff)})${R.c.act==="swiglu"?" ×2":""}`, R.mFFN1, "O(S)"],
+    ["FFN 降维", `(M×${nInt(R.c.dff)})·(${nInt(R.c.dff)}×d)`, R.mFFN2, "O(S)"],
+    ["LM Head", "(M×d)·(d×V)", R.mLM, "O(S)"]
+  ];
+  function c3(x){return nInt(x);}
+  const coreMap={"QKV 投影":R.mQKV,"注意力 QKᵀ":R.mScore,"加权求和 AV":R.mAV,"输出投影 W_O":R.mO,"FFN 升维":R.mFFN1,"FFN 降维":R.mFFN2,"LM Head":R.mLM};
+  $("tbl-flops").innerHTML = rows.map(r=>{
+    const cls = r[3]==="O(S²)"?"p-a":"p-c";
+    return `<tr><td><b>${r[0]}</b></td><td class="fx">${r[1]}</td><td class="n">${fmtFlops(r[2])}</td><td class="n">${pct(r[2]/R.mTotal)}</td><td><span class="pill ${cls}">${r[3]}</span></td></tr>`;
+  }).join("") + `<tr class="tot"><td>合计</td><td class="fx">${R.c.L} 层 × 单层 + LM Head</td><td class="n">${fmtFlops(R.mTotal)}</td><td class="n">100.0%</td><td></td></tr>`;
+
+  /* 条形图 */
+  const segs=[
+    ["QKV 投影",R.mQKV,"var(--compute)"],["QKᵀ",R.mScore,"var(--attn)"],["AV",R.mAV,"var(--attn)"],
+    ["W_O",R.mO,"#818CF8"],["FFN 升维",R.mFFN1,"var(--mem)"],["FFN 降维",R.mFFN2,"#34D399"],["LM Head",R.mLM,"var(--param)"]
+  ];
+  const bar = segs.map(s=>`<span style="width:${(s[1]/R.mTotal*100).toFixed(2)}%;background:${s[2]}" title="${s[0]}"></span>`).join("");
+  $("flopsBar").innerHTML = `<div style="margin-top:18px">
+    <div class="tiny" style="margin-bottom:6px">FLOPs 构成（按模块）</div>
+    <div class="bar" style="height:16px">${bar}</div>
+    <div class="legend">${segs.map(s=>`<span><i style="background:${s[2]}"></i>${s[0]} ${pct(s[1]/R.mTotal)}</span>`).join("")}</div>
+  </div>`;
+
+  /* 非矩阵乘算子 */
+  const nz=[["归一化",R.oNorm],["Softmax",R.oSoftmax],["激活函数",R.oAct],["RoPE",R.oRope],["残差相加",R.oResid]];
+  $("flopsBar").innerHTML += `<div class="tblwrap" style="margin-top:14px"><table>
+    <thead><tr><th>非矩阵乘算子</th><th class="n">FLOPs</th><th class="n">相对矩阵乘总量</th></tr></thead><tbody>`
+    + nz.filter(x=>x[1]>0).map(x=>`<tr><td>${x[0]}</td><td class="n">${fmtFlops(x[1])}</td><td class="n">${(x[1]/R.mTotal*100).toFixed(3)}%</td></tr>`).join("")
+    + `<tr class="tot"><td>非矩阵乘合计</td><td class="n">${fmtFlops(R.oTotal)}</td><td class="n">${(R.oTotal/R.mTotal*100).toFixed(3)}%</td></tr>`
+    + `</tbody></table></div><p class="tiny">计算量占比可以忽略（${(R.oTotal/R.mTotal*100).toFixed(2)}%），但它们逐个元素读写显存，在 Decode 阶段的带宽预算里不可忽略。</p>`;
+}
+
+/* --- 序列缩放 --- */
+function renderScale(R){
+  const c=R.c, list=[256,512,1024,2048,4096,8192,16384,32768];
+  const th=$("thScale");
+  if(th) th.innerHTML = phase==="prefill" ? "S（序列长度）" : "C（上下文长度）";
+  const rows = list.map(S=>{
+    const M = phase==="prefill" ? c.B*S : c.B;
+    const T = phase==="prefill" ? S : R.Cctx;
+    const mQKV=2*M*c.d*(c.d+2*R.dkv), mO=2*M*c.d*c.d;
+    const mF1=(c.act==="swiglu")?4*M*c.d*c.dff:2*M*c.d*c.dff, mF2=2*M*c.dff*c.d;
+    const lin=(mQKV+mO+mF1+mF2)*c.L + 2*M*c.d*c.V;
+    const sq=(2*M*T*c.d*2)*c.L;
+    const tot=lin+sq;
+    return {S,lin,sq,tot,r:sq/tot};
+  });
+  $("tbl-scale").innerHTML = rows.map(x=>`<tr${x.r>0.3?' style="background:#FFFCF4"':''}>
+    <td class="n"><b>${nInt(x.S)}</b></td><td class="n">${fmtFlops(x.lin,1)}</td><td class="n">${fmtFlops(x.sq,1)}</td>
+    <td class="n">${fmtFlops(x.tot,1)}</td><td class="n" style="color:${x.r>0.3?"var(--attn)":"var(--ink2)"}"><b>${pct(x.r)}</b></td></tr>`).join("");
+}
+
+/* --- 显存 --- */
+function renderMem(R){
+  const c=R.c;
+  const pctW = R.wBytes/R.inferTotal, pctK = R.kvBytes/R.inferTotal, pctA = R.bufBytes/R.inferTotal;
+  $("memCards").innerHTML = `
+    <div class="card"><h4>权重（恒定）</h4><div class="big m">${fmtB(R.wBytes)}</div>
+      <div class="tiny">${fmtN(R.N)} 参数 × ${c.P} 字节 · 占推理显存 ${pct(pctW)}</div>
+      <div class="bar" style="margin-top:10px"><span style="width:${pctW*100}%;background:var(--mem)"></span></div></div>
+    <div class="card"><h4>KV Cache（随上下文线性）</h4><div class="big k">${fmtB(R.kvBytes)}</div>
+      <div class="tiny">${c.L} 层 × 2 × ${nInt(R.dkv)} × ${nInt(R.Cctx)} × ${c.P}B · 占 ${pct(pctK)}</div>
+      <div class="bar" style="margin-top:10px"><span style="width:${pctK*100}%;background:var(--kv)"></span></div></div>
+    <div class="card"><h4>中间激活 + 缓冲区</h4><div class="big c">${fmtB(R.bufBytes)}</div>
+      <div class="tiny">单层工作集 ${fmtB(R.actBytesPerLayer)} + logits ${fmtB(R.logitsBytes)} · 占 ${pct(pctA)}</div>
+      <div class="bar" style="margin-top:10px"><span style="width:${pctA*100}%;background:var(--compute)"></span></div></div>
+    <div class="card" style="border-color:#C7D2FE"><h4>推理峰值（合计）</h4><div class="big" style="color:var(--ink)">${fmtB(R.inferTotal)}</div>
+      <div class="tiny">${R.inferTotal>R.hw.mem?`<b style="color:var(--kv)">超过 ${R.hw.label} 的 ${fmtB(R.hw.mem)} —— 需量化 / 张量并行</b>`:`可放入 ${R.hw.label}（${fmtB(R.hw.mem)}），余量 ${fmtB(R.hw.mem-R.inferTotal)}`}</div></div>`;
+
+  const rows=[
+    ["模型权重", `N × P = ${nInt(R.N)} × ${c.P}`, R.N, R.wBytes, "恒定，不随输入变化"],
+    ["KV Cache", `2 × L × d_kv × C × P = 2×${c.L}×${nInt(R.dkv)}×${nInt(R.Cctx)}×${c.P}`, 2*c.L*R.dkv*R.Cctx, R.kvBytes, "随上下文长度线性 ← 服务长文本的主要成本"],
+    ["单层激活工作集", c.flash?"≈ M·P·(4d + 2d_kv + 中间层) 不物化 S×S":"含 2×M×H×T 的 S×S 矩阵", R.actBytesPerLayer/c.P, R.actBytesPerLayer, "随批大小线性 ← 影响最大批大小"],
+    ["logits 张量", `M × V = ${nInt(R.M)} × ${nInt(c.V)}`, R.M*c.V, R.logitsBytes, phase==="prefill"?"预填充时需完整输出":"只取最后一行，实际很小"]
+  ];
+  $("tbl-mem").innerHTML = rows.map(r=>`<tr><td><b>${r[0]}</b></td><td class="fx">${r[1]}</td><td class="n">${fmtN(r[2])}</td><td class="n">${fmtB(r[3])}</td><td class="tiny">${r[4]}</td></tr>`).join("")
+    + `<tr class="tot"><td>推理合计</td><td class="fx">权重 + KV + 激活</td><td class="n">—</td><td class="n">${fmtB(R.inferTotal)}</td><td class="tiny">${R.inferTotal>R.hw.mem?"超出单卡":"单卡可容纳"}</td></tr>`;
+}
+
+/* --- 激活明细 --- */
+function renderActs(R){
+  const c=R.c, P=c.P;
+  const shapeFor = (nm)=>{
+    const m = {"x 残差流":c.d,"x_norm":c.d,"q":c.d,"k":R.dkv,"v":R.dkv,"attn_out":c.d,"o 投影输出":c.d,
+      "FFN 中间层":c.dff*(c.act==="swiglu"?2:1),"FFN 输出":c.d};
+    return `[${c.B}, ${phase==="prefill"?c.S:1}, ${nInt(m[nm])}]`;
+  };
+  let rows = R.actVec.map(x=>`<tr><td>${x[0]}</td><td class="dim">${shapeFor(x[0])}</td><td class="n">${nInt(x[1])}</td><td class="n">${fmtB(x[1]*P)}</td>
+    <td class="tiny">${x[0]==="k"||x[0]==="v"?"会写入 KV Cache 并长期保留":"前向结束即释放"}</td></tr>`);
+  if(!c.flash){
+    const sc=c.B*c.H*(phase==="prefill"?c.S:1)*R.Cctx;
+    rows.push(`<tr style="background:#FFFCF4"><td>注意力分数矩阵 S</td><td class="dim">[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}]</td><td class="n">${nInt(sc)}</td><td class="n">${fmtB(sc*P)}</td><td class="tiny">仅当不启用 FlashAttention 时才物化</td></tr>`);
+    rows.push(`<tr style="background:#FFFCF4"><td>注意力权重 A（softmax 后）</td><td class="dim">[B, ${c.H}, ${phase==="prefill"?c.S:1}, ${nInt(R.Cctx)}]</td><td class="n">${nInt(sc)}</td><td class="n">${fmtB(sc*P)}</td><td class="tiny">同上，读数最贵的一项</td></tr>`);
+  }
+  rows.push(`<tr><td>logits</td><td class="dim">[B, ${phase==="prefill"?c.S:1}, ${nInt(c.V)}]</td><td class="n">${nInt(R.M*c.V)}</td><td class="n">${fmtB(R.logitsBytes)}</td><td class="tiny">位于模型末端</td></tr>`);
+  const sum = R.actBytesPerLayer + R.logitsBytes;
+  rows.push(`<tr class="tot"><td>单层工作集 + logits</td><td class="dim">—</td><td class="n">—</td><td class="n">${fmtB(sum)}</td><td class="tiny">推理时层间可复用缓冲</td></tr>`);
+  $("tbl-act").innerHTML = rows.join("");
+
+  $("actNote").innerHTML = c.flash
+    ? `<b>FlashAttention 打开时的效果：</b>注意力分数矩阵不再落显存，单层激活从含 ${c.B*c.H*(phase==="prefill"?c.S:1)*R.Cctx>0?fmtB(2*c.B*c.H*(phase==="prefill"?c.S:1)*R.Cctx*P):"0"} 的 S×S 项降为 ${fmtB(R.actBytesPerLayer)}，<b>从 O(S²) 变成 O(S)</b>。注意 FLOPs 一个都没少（还是 ${fmtFlops(R.mTotal)}），省的全是显存和带宽。`
+    : `<b>关闭 FlashAttention 时：</b>必须物化 <span class="mono">[B,H,${phase==="prefill"?c.S:1},${nInt(R.Cctx)}]</span> 的分数矩阵和权重矩阵各一份，单层激活 ${fmtB(R.actBytesPerLayer)}。序列长度翻倍，这一项就翻 4 倍 —— 这是长上下文推理显存爆炸的直接原因。`;
+}
+
+/* --- KV Cache --- */
+function renderKV(R){
+  const c=R.c;
+  $("kvFormula").innerHTML =
+`KV Cache 字节数 = 2 × L × H_kv × d_h × C × P
+                = 2 × ${c.L} × ${c.Hkv} × ${R.dh} × ${nInt(R.Cctx)} × ${c.P}
+                = 2 × ${c.L} × ${nInt(R.dkv)} × ${nInt(R.Cctx)} × ${c.P}
+                = ${nInt(2*c.L*R.dkv*R.Cctx)} 个元素 = ${fmtB(R.kvBytes)}
+
+「2」来自 K 和 V 两份张量；C 是已缓存的 token 数（每生成 1 个 token 就 +1）。
+每个 token 的增量 = 2 × L × d_kv × P = ${fmtB(R.kvPerTok)}`;
+
+  $("kvTotal").textContent = fmtB(R.kvBytes);
+  $("kvPerTok").textContent = `${fmtB(R.kvPerTok)} / token · 上下文 ${nInt(R.Cctx)} tokens · Batch ${c.B} 时共 ${fmtB(R.kvBytes*c.B)}`;
+  const maxC = Math.floor(R.hw.mem/R.kvPerTok);
+  $("kvBreak").innerHTML = [
+    ["单层 K", fmtB(c.L?R.kvBytes/c.L/2:0)],["单层 V", fmtB(c.L?R.kvBytes/c.L/2:0)],
+    ["全部层合计", fmtB(R.kvBytes)],
+    ["占权重比例", (R.kvBytes/R.wBytes*100).toFixed(1)+"%"],
+    ["单卡显存可容纳上下文", nInt(Math.max(0,maxC))+" tokens（仅 KV，不含权重）"]
+  ].map(x=>`<li><span>${x[0]}</span><span>${x[1]}</span></li>`).join("");
+
+  $("kvShapes").innerHTML = [
+    ["K 张量", `[B, ${c.Hkv}, ${nInt(R.Cctx)}, ${R.dh}]`],
+    ["V 张量", `[B, ${c.Hkv}, ${nInt(R.Cctx)}, ${R.dh}]`],
+    ["单头维度 d_h", nInt(R.dh)],
+    ["K/V 头数 H_kv", nInt(c.Hkv)+(c.Hkv<c.H?`（Q 有 ${c.H} 头 → 每 ${(c.H/c.Hkv).toFixed(0)} 个 Q 头共享 1 组 K/V）`:"")],
+    ["d_kv = H_kv · d_h", nInt(R.dkv)+(c.Hkv<c.H?`（vs Q 的 d = ${nInt(c.d)}）`:"")]
+  ].map(x=>`<li><span>${x[0]}</span><span>${x[1]}</span></li>`).join("");
+
+  $("kvGqaNote").innerHTML = c.Hkv<c.H
+    ? `<b>当前已是 GQA。</b>把它切回 MHA（H_kv = H = ${c.H}）会使 KV Cache 膨胀 <b>${(c.d/R.dkv).toFixed(1)} 倍</b>，从 ${fmtB(R.kvBytes)} 涨到 ${fmtB(2*c.L*c.d*R.Cctx*c.P)} —— 而模型参数量只增加 ${pct(2*c.d*(c.d-R.dkv)*c.L/R.N)}。这就是 GQA 存在的全部理由。`
+    : `<b>当前是标准 MHA</b>（H_kv = H = ${c.H}），K/V 与 Q 同宽。试着把 H<sub>kv</sub> 调小（如 ${Math.max(1,Math.round(c.H/8))}）即可看到 GQA 的效果：KV Cache 与 K/V 投影 FLOPs 同步下降，模型质量几乎不受影响。`;
+
+  /* KV 增长图 */
+  drawKVChart(R);
+  /* no-cache 对比 */
+  const C=R.Cctx, d=R.dkv;
+  const rows=[
+    ["完整 KV Cache", `2 · t · d_kv`, `Σ 2·t·d_kv ≈ ${nInt(C*(C+1)*d)}`, "1.0×（基准）", `占用 ${fmtB(R.kvBytes)} 显存`],
+    ["缓存 K/V 但重算注意力矩阵", `O(t) 存储，O(t) 计算`, `Σ O(t) ≈ ${nInt(C*C/2)}·常数`, `约 ${(2).toFixed(0)}× 计算`, "省显存，但每步都要重算"],
+    ["完全不缓存", `每步重算全部历史 K/V`, `Σ O(t·d) → 约 ${fmtFlops(R.mScore*C/2*c.L/2)}`, `约 ${nInt(C/2)}× 计算`, "计算量随 C² 爆炸，不可接受"]
+  ];
+  $("tbl-nocache").innerHTML = rows.map((r,i)=>`<tr${i===0?' style="background:#F4FDFA"':''}><td><b>${r[0]}</b></td><td class="fx">${r[1]}</td><td class="fx">${r[2]}</td><td class="n"><b>${r[3]}</b></td><td class="tiny">${r[4]}</td></tr>`).join("");
+}
+
+function drawKVChart(R){
+  const c=R.c;
+  const W=760,H=320, L=64, Rt=20, Tp=18, Bt=40;
+  const xs=[64,128,256,512,1024,2048,4096,8192,16384,32768,65536,131072];
+  const series=[
+    {name:`当前配置 d_kv=${nInt(R.dkv)}`, col:CLR.kv, dkv:R.dkv},
+    {name:`MHA 全宽 d_kv=${nInt(c.d)}`, col:CLR.attn, dkv:c.d}
+  ];
+  if(c.Hkv===c.H) series.pop();
+  const ymax = Math.max(...series.map(s=>2*c.L*s.dkv*Math.max(...xs)*c.P));
+  const px = i => L + (Rt-L===0?0:(Math.log2(xs[i])-6)/11)*(W-L-14);
+  const py = v => H-Bt - (Math.log10(v)-3)/(Math.log10(ymax)-3)*(H-Bt-Tp);
+  let g="";
+  /* grid */
+  for(let e=3;e<=Math.ceil(Math.log10(ymax));e++){
+    const y=py(Math.pow(10,e));
+    if(y<Tp-2||y>H-Bt+2) continue;
+    g+=`<line x1="${L}" y1="${y}" x2="${W-14}" y2="${y}" stroke="#EFF1F4"/>`;
+    g+=`<text x="${L-8}" y="${y+4}" text-anchor="end" font-size="10" fill="${CLR.muted}" font-family="monospace">${fmtB(Math.pow(10,e),0)}</text>`;
+  }
+  xs.forEach((x,i)=>{
+    if(![256,1024,4096,16384,65536].includes(x)) return;
+    g+=`<text x="${px(i)}" y="${H-Bt+16}" text-anchor="middle" font-size="10" fill="${CLR.muted}" font-family="monospace">${x>=1024?(x/1024)+"K":x}</text>`;
+  });
+  series.forEach(s=>{
+    const pts = xs.map((x,i)=>`${px(i)},${py(Math.max(1e3,2*c.L*s.dkv*x*c.P))}`).join(" ");
+    g+=`<polyline points="${pts}" fill="none" stroke="${s.col}" stroke-width="2.2"/>`;
+    xs.forEach((x,i)=>{ if(x===c.S||x===2048||x===32768){ const cy=py(Math.max(1e3,2*c.L*s.dkv*x*c.P)); g+=`<circle cx="${px(i)}" cy="${cy}" r="3" fill="${s.col}"/>`; }});
+  });
+  /* 当前点 */
+  const curLen = R.Cctx;
+  if(curLen>=64&&curLen<=131072){
+    let i=0; xs.forEach((x,k)=>{if(x<=curLen)i=k;});
+    const cur=py(Math.max(1e3,2*c.L*R.dkv*curLen*c.P));
+    g+=`<line x1="${px(i)}" y1="${Tp}" x2="${px(i)}" y2="${H-Bt}" stroke="${CLR.ink}" stroke-dasharray="3 3" opacity=".35"/>`;
+    g+=`<circle cx="${px(i)}" cy="${cur}" r="5" fill="none" stroke="${CLR.ink}" stroke-width="2"/>`;
+    g+=`<text x="${px(i)+8}" y="${cur-8}" font-size="11" fill="${CLR.ink}" font-weight="600">${phase==="prefill"?"S":"C"}=${nInt(curLen)} → ${fmtB(2*c.L*R.dkv*curLen*c.P)}</text>`;
+  }
+  const hwLine = py(c.hw.mem);
+  if(hwLine>Tp&&hwLine<H-Bt){
+    g+=`<line x1="${L}" y1="${hwLine}" x2="${W-14}" y2="${hwLine}" stroke="${CLR.compute}" stroke-dasharray="5 4" stroke-width="1.5"/>`;
+    g+=`<text x="${W-18}" y="${hwLine-6}" text-anchor="end" font-size="10.5" fill="${CLR.compute}" font-weight="600">${c.hw.label} 显存上限 ${fmtB(c.hw.mem,0)}</text>`;
+  }
+  $("kvChart").innerHTML = `<rect x="${L}" y="${Tp}" width="${W-L-14}" height="${H-Bt-Tp}" fill="${CLR.soft}" rx="6"/>`+g;
+  $("kvLegend").innerHTML = series.map(s=>`<span><i style="background:${s.col}"></i>${s.name}</span>`).join("")
+    + `<span><i style="background:${CLR.ink}"></i>当前序列长度</span>`;
+}
+
+/* --- Roofline --- */
+function renderRoofline(R){
+  const c=R.c;
+  $("roofFormula").innerHTML =
+`算术强度 AI = FLOPs ÷ 访存字节数
+脊点（Ridge Point）= 峰值算力 ÷ 显存带宽 = ${(R.hw.flops/1e12).toFixed(0)} TFLOPS ÷ ${(R.hw.bw/1e12).toFixed(2)} TB/s = ${R.ridge.toFixed(0)} FLOP/Byte
+
+AI < ${R.ridge.toFixed(0)}  →  带宽受限，提速靠减少访存（批处理、量化、GQA）
+AI > ${R.ridge.toFixed(0)}  →  算力受限，提速靠更强算力或减少 FLOPs
+
+理论耗时 = max( FLOPs ÷ 峰值算力 , 访存字节 ÷ 带宽 )`;
+
+  const rows=[
+    ["矩阵乘 FLOPs", fmtFlops(R.mTotal), fmtFlops(R.fdc), "Prefill 一次算完 S 个 token；Decode 每个 token 都要走一遍全模型"],
+    ["必读权重字节", fmtB(R.wBytes), fmtB(R.wBytes), "Decode 每生成 1 token 就要把全部权重从 HBM 读一遍"],
+    ["额外读 KV Cache", "—", fmtB(R.kvBytes), "Prefill 只需写入；Decode 每步都要读全部历史 K/V"],
+    ["访存总量", fmtB(R.wBytes), fmtB(R.wBytes+R.kvBytes), ""],
+    ["算术强度 AI", R.aiPrefill.toFixed(2)+" FLOP/B", R.aiDecode.toFixed(2)+" FLOP/B", `脊点为 ${R.ridge.toFixed(0)}，两者相差 <b>${(R.ridge/Math.max(R.aiDecode,1e-6)).toFixed(0)} 倍</b>`],
+    ["瓶颈", R.aiPrefill>R.ridge?"计算受限 ✅":"带宽受限 ⚠️", R.aiDecode>R.ridge?"计算受限 ✅":"带宽受限 ⚠️", ""],
+    ["理论耗时", (R.tpf*1000).toFixed(2)+" ms", (R.tdc*1000).toFixed(3)+" ms", "取 compute 与 memory 两条路径的较大值"],
+    ["等效吞吐", nInt(c.S*c.B/R.tpf)+" tok/s", nInt(1/R.tdc)+" tok/s", "单卡理想值，实际再打 6~7 折"],
+    ["算力利用率", pct(Math.min(1,(R.fpf/R.tpf)/R.hw.flops)) , pct(Math.min(1,(R.fdc/R.tdc)/R.hw.flops)), "Decode 的利用率通常在个位数百分比"]
+  ];
+  $("tbl-roof").innerHTML = rows.map(r=>`<tr><td><b>${r[0]}</b></td><td class="n">${r[1]}</td><td class="n">${r[2]}</td><td class="tiny">${r[3]}</td></tr>`).join("");
+
+  $("roofNote").innerHTML = `<b>结论：</b>在这个配置下，Decode 的算术强度只有 <b>${R.aiDecode.toFixed(2)} FLOP/Byte</b>，距离脊点 ${R.ridge.toFixed(0)} 差了约 <b>${(R.ridge/Math.max(R.aiDecode,1e-6)).toFixed(0)} 倍</b>。也就是说，GPU 的算力单元有 <b>${((1-R.aiDecode/R.ridge)*100).toFixed(1)}%</b> 的时间在空转等数据。Decode 的耗时几乎完全由"把 ${fmtB(R.wBytes+R.kvBytes)} 从显存搬出来"决定 —— <b>${((R.tdc*1000)).toFixed(2)} ms/token 里，计算只占 ${((R.tdc>0?R.fdc/R.hw.flops/R.tdc*100:0)).toFixed(1)}%</b>。`;
+
+  drawRoofChart(R);
+}
+
+function drawRoofChart(R){
+  const c=R.c;
+  const W=760,Hh=400, L=66, Rt=22, Tp=22, Bt=46;
+  const x0=-1, x1=4;               // log10 AI
+  const y0=8, y1=15.2;             // log10 FLOPS
+  const px = v => L + (Math.log10(v)-x0)/(x1-x0)*(W-L-Rt);
+  const py = v => Hh-Bt - (Math.log10(v)-y0)/(y1-y0)*(Hh-Bt-Tp);
+  const ridge=R.ridge;
+  let g="";
+  for(let e=y0;e<=Math.floor(y1);e++){
+    const y=py(Math.pow(10,e));
+    g+=`<line x1="${L}" y1="${y}" x2="${W-Rt}" y2="${y}" stroke="#EFF1F4"/>`;
+    g+=`<text x="${L-8}" y="${y+4}" text-anchor="end" font-size="10" fill="${CLR.muted}" font-family="monospace">${Math.pow(10,e)>=1e12?(Math.pow(10,e)/1e12)+"T":(Math.pow(10,e)/1e9)+"G"}</text>`;
+  }
+  [-1,0,1,2,3,4].forEach(e=>{
+    const x=px(Math.pow(10,e));
+    g+=`<line x1="${x}" y1="${Tp}" x2="${x}" y2="${Hh-Bt}" stroke="${CLR.grid}"/>`;
+    g+=`<text x="${x}" y="${Hh-Bt+16}" text-anchor="middle" font-size="10" fill="${CLR.muted}" font-family="monospace">${Math.pow(10,e)}</text>`;
+  });
+  g+=`<text x="${W-Rt}" y="${Hh-Bt+34}" text-anchor="end" font-size="11" fill="${CLR.faint}">算术强度 FLOP/Byte（对数轴）</text>`;
+  g+=`<text x="${L-52}" y="${Tp+4}" font-size="10.5" fill="${CLR.faint}">FLOPs（对数轴）</text>`;
+  /* 带宽屋顶 */
+  const roofPts = [[px(Math.pow(10,x0)),py(R.hw.bw*Math.pow(10,x0))],[px(ridge),py(R.hw.flops)],[px(Math.pow(10,x1)),py(R.hw.flops)]];
+  g+=`<polyline points="${roofPts.map(p=>p[0]+","+p[1]).join(" ")}" fill="none" stroke="${CLR.mem}" stroke-width="2.6"/>`;
+  /* 脊点 */
+  g+=`<circle cx="${px(ridge)}" cy="${py(R.hw.flops)}" r="5" fill="${CLR.muted}"/>`;
+  g+=`<line x1="${px(ridge)}" y1="${py(R.hw.flops)}" x2="${px(ridge)}" y2="${Hh-Bt}" stroke="${CLR.muted}" stroke-dasharray="4 4"/>`;
+  g+=`<text x="${px(ridge)+8}" y="${py(R.hw.flops)-9}" font-size="10.5" fill="#64748B" font-weight="600">脊点 AI=${ridge.toFixed(0)}</text>`;
+  /* 工作点 */
+  const mark=(ai,f, col, label, dy)=>{
+    const x=Math.max(px(Math.pow(10,x0)), Math.min(px(Math.pow(10,x1)), px(Math.max(ai,Math.pow(10,x0)))));
+    const y=Math.max(Tp+6, Math.min(Hh-Bt-6, py(Math.max(f,Math.pow(10,y0)))));
+    g+=`<circle cx="${x}" cy="${y}" r="6.5" fill="${col}" stroke="#fff" stroke-width="2"/>`;
+    g+=`<line x1="${L}" y1="${y}" x2="${x}" y2="${y}" stroke="${col}" stroke-dasharray="2 3" opacity=".55"/>`;
+    g+=`<line x1="${x}" y1="${y}" x2="${x}" y2="${Hh-Bt}" stroke="${col}" stroke-dasharray="2 3" opacity=".55"/>`;
+    g+=`<text x="${x+11}" y="${y+dy}" font-size="11" font-weight="650" fill="${col}">${label}</text>`;
+  };
+  const fPf = Math.min(R.fpf/R.tpf, R.hw.flops);
+  const fDc = Math.min(R.fdc/R.tdc, R.hw.flops);
+  mark(R.aiPrefill, fPf, CLR.kv, `Prefill · AI=${R.aiPrefill.toFixed(1)} · ${fmtFlops(fPf,1)}/s`, 4);
+  mark(R.aiDecode, fDc, CLR.attn, `Decode · AI=${R.aiDecode.toFixed(2)} · ${fmtFlops(fDc,1)}/s`, 16);
+  g+=`<text x="${px(0.13)}" y="${py(R.hw.bw*0.13)-12}" font-size="10.5" fill="${CLR.mem}" font-weight="600">带宽屋顶 ${(R.hw.bw/1e12).toFixed(2)} TB/s</text>`;
+  g+=`<text x="${px(30)}" y="${py(R.hw.flops)-10}" font-size="10.5" fill="${CLR.compute}" font-weight="600">算力天花板 ${(R.hw.flops/1e12).toFixed(0)} TFLOPS</text>`;
+  $("roofChart").innerHTML = g;
+}
+
+/* --- 批大小 --- */
+function renderBatch(R){
+  const c=R.c;
+  const bs=[1,2,4,8,16,32,64,128];
+  const rows = bs.map(B=>{
+    const f = (2*B*c.d*(c.d+2*R.dkv) + 2*B*R.Cctx*c.d*2 + 2*B*c.d*c.d + ((c.act==="swiglu")?4*B*c.d*c.dff:2*B*c.d*c.dff) + 2*B*c.dff*c.d)*c.L + 2*B*c.d*c.V;
+    const by = R.wBytes + 2*c.L*R.dkv*R.Cctx*c.P*B;
+    const ai = f/by;
+    const t = Math.max(f/R.hw.flops, by/R.hw.bw);
+    const mt = by*c.B/B;
+    const fits = mt < R.hw.mem;
+    return {B,f,by,ai,t,lim: f/R.hw.flops>by/R.hw.bw?"计算":"带宽", tps:1/t, ok:fits};
+  });
+  $("tbl-batch").innerHTML = rows.map(r=>`<tr${r.B===c.B?' style="background:#F8FAFF"':''}${r.ok?"":' style="opacity:.45"'}>
+    <td class="n"><b>${r.B}</b></td><td class="n">${fmtFlops(r.f)}</td><td class="n">${fmtB(r.by)}</td>
+    <td class="n">${r.ai.toFixed(2)}</td>
+    <td><span class="pill ${r.lim==="计算"?"p-c":"p-k"}">${r.lim}受限</span></td>
+    <td class="n">${nInt(r.tps)}</td></tr>`).join("");
+}
+
+/* --- 训练 --- */
+function renderTrain(R){
+  const c=R.c;
+  const bytesPer = [["FP16/BF16 模型权重副本", "2 × N", 2, R.stW16, "前向与反传实际使用的参数"],
+    ["FP32 主权重（master weights）", "4 × N", 4, R.stW32, "优化器更新的高精度副本，防止小更新被舍入"],
+    ["Adam 一阶动量 m", "4 × N", 4, R.stM, "指数移动平均的梯度"],
+    ["Adam 二阶动量 v", "4 × N", 4, R.stV, "梯度平方的指数移动平均"],
+    ["FP16 梯度", "2 × N", 2, R.stG, "反传产生的梯度缓冲"],
+    ["小计（优化器状态 + 权重 + 梯度）", "16 × N", 16, R.trainState, "这就是著名的「每参数 16 字节」"]];
+  $("tbl-train").innerHTML = bytesPer.map((r,i)=>`<tr${i===5?' class="tot"':''}><td><b>${r[0]}</b></td><td class="fx">${r[1]}</td><td class="n">${r[2]}</td><td class="n">${fmtB(r[3])}</td><td class="tiny">${r[4]}</td></tr>`).join("");
+  $("trInf").textContent = fmtB(R.wBytes);
+  $("trState").textContent = fmtB(R.trainState);
+  $("trState").parentElement.querySelector(".tiny").textContent = `${fmtN(R.N)} × 16 字节 · 是纯权重（${fmtB(R.wBytes)}）的 ${(R.trainState/R.wBytes).toFixed(1)} 倍`;
+
+  const rows=[
+    ["朴素：保留全部层的激活", "每层全部中间张量", R.trainActStd, 1, "显存随 序列长度 × 批大小 × 层数 线性爆炸"],
+    ["梯度检查点（√L 分段）", "只保留每段边界，段内重算", R.trainActCkpt, R.trainActCkpt/R.trainActStd, `多花约 ${((1/R.c.L)*(R.c.L/ Math.sqrt(R.c.L))*100).toFixed(0)}% 前向计算时间，换取显存下降`],
+    ["只留残差流（极端）", "仅 残差流入口 ", R.M*0 /*placeholder*/, 0, "计算量约增加 33%，工程上很少单独使用"]
+  ];
+  rows[2][2] = (c.B*c.S*c.P*c.d)*c.L;
+  rows[2][3] = rows[2][2]/R.trainActStd;
+  $("tbl-ckpt").innerHTML = rows.map((r,i)=>`<tr${i===0?' style="background:#FFFCF4"':''}><td><b>${r[0]}</b></td><td class="fx">${r[1]}</td><td class="n">${fmtB(r[2])}</td><td class="n">${pct(r[3])}</td><td class="tiny">${r[4]}</td></tr>`).join("");
+
+  const tot = R.trainState + (c.ckpt?R.trainActCkpt:R.trainActStd);
+  $("trainNote").innerHTML = `<b>训练总显存估算：</b>优化器/权重/梯度 ${fmtB(R.trainState)} + 激活 ${fmtB(c.ckpt?R.trainActCkpt:R.trainActStd)} = <b>${fmtB(tot)}</b>。
+    这是推理显存（${fmtB(R.inferTotal)}）的 <b>${(tot/R.inferTotal).toFixed(1)} 倍</b>。
+    要放进 ${c.hw.label}（${fmtB(R.hw.mem)}）需要 <b>${Math.max(1,Math.ceil(tot/R.hw.mem))} 张卡</b>以上，且必须配合 ZeRO / FSDP 做优化器状态分片 —— 这正是分布式训练框架的核心动机。
+    ${c.ckpt?"（已启用梯度检查点）":"（未启用梯度检查点，激活显存为主因）"}`;
+}
+
+/* --- 模型对照 --- */
+function renderModels(){
+  const keys=["gpt2s","gpt2m","gpt2xl","l7","mistral","l13","l70","gpt3"];
+  const rows = keys.map(k=>{
+    const p=PRESETS[k];
+    const dh=p.d/p.H, dkv=Math.round(p.Hkv*dh);
+    const attn=p.d*p.d + 2*p.d*dkv + p.d*p.d;
+    const npd = p.norm==="rms"?p.d:2*p.d;
+    const ffn = p.act==="swiglu"?3*p.d*p.dff:2*p.d*p.dff;
+    const layer=attn+ffn+2*npd;
+    const tie = p.norm==="ln";
+    const N = p.L*layer + p.V*p.d + npd + (tie?0:p.V*p.d);
+    const w16=N*2;
+    const kvTok=2*p.L*dkv*2;
+    const kv2k=kvTok*2048;
+    /* 2K 上下文下单次前向的注意力占比（S=2048, B=1） */
+    const S=2048,M=S;
+    const sq=(2*M*S*p.d*2)*p.L;
+    const lin=(2*M*p.d*(p.d+2*dkv) + 2*M*p.d*p.d + (p.act==="swiglu"?4*M*p.d*p.dff:2*M*p.d*p.dff) + 2*M*p.dff*p.d)*p.L + 2*M*p.d*p.V;
+    const ratio=sq/(sq+lin);
+    return {k,p,N,w16,kvTok,kv2k,ratio};
+  });
+  $("tbl-models").innerHTML = rows.map(r=>`<tr style="cursor:pointer" onclick="applyPreset('${r.k}')">
+    <td><b>${r.p.label}</b></td><td class="n">${r.p.L}</td><td class="n">${nInt(r.p.d)}</td>
+    <td class="n">${r.p.H} / ${r.p.Hkv}${r.p.Hkv<r.p.H?' <span class="pill p-k">GQA</span>':''}</td>
+    <td class="n">${fmtN(r.N)}</td><td class="n">${fmtB(r.w16)}</td>
+    <td class="n">${fmtB(r.kvTok)}</td><td class="n">${fmtB(r.kv2k)}</td>
+    <td class="n">${pct(r.ratio)}</td></tr>`).join("");
+}
+
+/* --- 要点 --- */
+function renderTakeaways(){
+  const items=[
+    ["FLOPs ≈ 2 × N × M","前向传播的计算量有个极其好用的近似：参数量乘以 token 数再乘 2。本页的逐项累加与它相差不到几个百分点，误差来自注意力的平方项与归一化零头。记住它，你就能在脑子里估算任何模型的算力需求。"],
+    ["只有注意力是平方的","QKᵀ 与 AV 是 O(S²)，其余全部是 O(S)。序列长度从 2K 涨到 32K，总 FLOPs 涨 16 倍，但注意力项涨 256 倍 —— 长上下文的一切成本都从这里来。"],
+    ["Prefill 吃算力，Decode 吃带宽","Prefill 的矩阵是高的，算术强度远超脊点，GPU 算力打满；Decode 每个 token 只做 2N FLOPs 却要读 N·P 字节权重，算术强度约等于 2/P。同一张卡，同一份权重，利用率能差两个数量级。"],
+    ["KV Cache 是 O(C) 的必付租金","2 · L · d_kv · P 字节/token。它让注意力从 O(C²) 计算降到 O(C)，代价是显存随上下文线性增长。这是所有长上下文推理优化的主战场。"],
+    ["GQA 是性价比最高的架构改动","把 KV 头数从 H 降到 H/8，参数量几乎不变，KV Cache 与 K/V 投影直接缩小 8 倍。LLaMA-2-70B、Mistral 全都在用。"],
+    ["FFN 是参数与 FLOPs 的双料主力","FFN 占单层参数与 FLOPs 的一半以上。而且无论 GELU+4d 还是 SwiGLU+8d/3，矩阵乘 FLOPs 都恰好是 16·M·d² —— 这不是巧合，是刻意对齐的设计。"],
+    ["d² 是隐藏的成本放大器","几乎所有矩阵乘 FLOPs 都正比于 d²，参数量也是。隐藏维翻倍，算力与显存同时翻 4 倍 —— 所以扩大模型规模时，加深（L）比加宽（d）在参数效率上更划算。"],
+    ["量化省的是显存不是算力","权重从 FP16 到 INT4，显存降 4 倍，Decode 速度几乎同比例提升（因为带宽受限），但 FLOPs 一个没变。对 Prefill 帮助有限，对 Decode 立竿见影。"],
+    ["FlashAttention 省的是显存","它不减少任何 FLOPs，只是不把 S×S 矩阵写进显存，把激活从 O(S²) 降到 O(S)，同时把 softmax 融进矩阵乘循环。计算量不变，速度和可支持上下文长度大幅提升。"],
+    ["训练显存 = 推理的 10 倍以上","混合精度 Adam 需要 16 字节/参数（权重+主权重+m+v+梯度），再加激活。7B 模型训练轻松超过 100GB，必须靠 ZeRO/FSDP 分片。推理只需一份权重加 KV Cache，这就是推理服务便宜得多、而微调很贵的根本原因。"]
+  ];
+  $("takeaways").innerHTML = items.map((x,i)=>`<div class="card">
+    <h4><span class="pill p-c" style="margin-right:6px">${String(i+1).padStart(2,"0")}</span>${x[0]}</h4>
+    <p style="font-size:12.5px;margin:0">${x[1]}</p></div>`).join("");
+}
+
+/* ============================ 交互 ============================ */
+function applyPreset(k){
+  const p=PRESETS[k]; if(!p) return;
+  presetKey=k;
+  $("preset").value=k;
+  ["d","L","H","Hkv","dff","V"].forEach(f=>{ $(f).value = p[f]; });
+  $("act").value=p.act; $("norm").value=p.norm; $("pos").value=p.pos;
+  renderAll();
+}
+function initPresetSelect(){
+  const all=["l7","mistral","l13","l70","gpt2s","gpt2m","gpt2xl","gpt3"];
+  $("preset").innerHTML = all.map(k=>`<option value="${k}">${PRESETS[k].label}</option>`).join("");
+  $("preset").value = "l7";
+  applyPreset("l7");
+}
+window.applyPreset = applyPreset;
+
+function bindUI(){
+  ["B","S","C","L","d","H","Hkv","dff","V","prec","act","norm","pos","hw"].forEach(id=>{
+    $(id).addEventListener("input",()=>{ renderAll(); });
+    $(id).addEventListener("change",()=>{ renderAll(); });
+  });
+  ["flash","train","ckpt"].forEach(id=>$(id).addEventListener("change",renderAll));
+  $("preset").addEventListener("change",e=>applyPreset(e.target.value));
+  $("phaseSeg").addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b) return;
+    [...$("phaseSeg").children].forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); phase=b.dataset.v; updatePhaseUI(); renderAll();
+  });
+}
+function updatePhaseUI(){
+  const pf = phase==="prefill";
+  $("lbSeq").textContent = pf?"序列长度 S":"单步生成长度（固定 1）";
+  $("S").disabled = !pf;
+  $("S").style.opacity = pf?1:.45;
+  $("ctxWrap").style.display = pf?"none":"block";
+  $("phaseHint").innerHTML = pf
+    ? "Prefill：一次性并行处理整段 prompt 的 S 个 token，写入 KV Cache。"
+    : "Decode：每步只算 1 个新 token，读取已缓存的 C 个历史 K/V。C 每步 +1。";
+}
+initPresetSelect();
+bindUI();
+updatePhaseUI();
+renderAll();
+window.addEventListener("resize",()=>{});
+</script>
+</body>
+</html>

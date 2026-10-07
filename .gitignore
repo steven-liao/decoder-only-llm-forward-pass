@@ -1,0 +1,14 @@
+# 操作系统 / 编辑器杂项
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*~
+*.swp
+
+# 临时与构建产物
+*.tmp
+*.log
+__pycache__/
+node_modules/
+.tmpcheck/

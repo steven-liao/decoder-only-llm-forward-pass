@@ -1,0 +1,13 @@
+# 统一以 LF 存入仓库并检出，避免 Windows 下的换行符抖动
+* text=auto eol=lf
+
+# 明确二进制类型，避免被误判为文本
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.mp4  binary
+*.pdf  binary
+*.zip  binary
